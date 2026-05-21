@@ -5,8 +5,8 @@
 #
 # Usage:
 #   ./scripts/start_sim.sh                         # urban_rescue + sensor model
-#   ./scripts/start_sim.sh default x500            # PX4 standard fallback
-#   ./scripts/start_sim.sh urban_rescue x500       # custom world + standard model
+#   ./scripts/start_sim.sh default x500            # control-debug fallback only; not the research showcase
+#   ./scripts/start_sim.sh urban_rescue x500       # control-debug fallback only; not the research showcase
 #   PX4_DIR=/path/to/PX4-Autopilot ./scripts/start_sim.sh
 #
 # This starts: DDS Agent + Gazebo + PX4 SITL.
@@ -83,14 +83,21 @@ if [ ! -f "$WORLD_SDF" ]; then
 fi
 
 if [ ! -d "${LOCAL_MODELS}/${MODEL}" ] && [ ! -d "${PX4_MODELS}/${MODEL}" ]; then
-    echo "WARNING: Model '${MODEL}' not found in common Gazebo model directories."
-    if [ "$MODEL" != "x500" ] && { [ -d "${LOCAL_MODELS}/x500" ] || [ -d "${PX4_MODELS}/x500" ]; }; then
-        echo "Falling back to model: x500"
-        MODEL="x500"
-        export PX4_SIM_MODEL="x500"
+    echo "ERROR: Model '${MODEL}' not found in common Gazebo model directories."
+    if [ "$MODEL" = "x500_lidar_2d_cam" ]; then
+        echo "The full AerialClaw research demo requires our modified UAV model."
+        echo "Next: ./scripts/setup_px4.sh"
     else
-        echo "Continuing anyway; Gazebo/PX4 may still resolve it from another path."
+        echo "If you intentionally want a control-debug fallback, ensure the model is installed first."
     fi
+    exit 1
+fi
+
+if [ "$MODEL" != "x500_lidar_2d_cam" ]; then
+    echo "WARNING: You are not using the AerialClaw modified UAV model."
+    echo "  Current model: $MODEL"
+    echo "  Research showcase model: x500_lidar_2d_cam"
+    echo "  Camera/LiDAR panels may not represent the AerialClaw demo capability."
 fi
 
 cleanup() {

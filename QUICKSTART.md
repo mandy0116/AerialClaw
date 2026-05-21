@@ -65,7 +65,7 @@ bash scripts/smoke_mock.sh
 
 ## 3. PX4 + Gazebo full simulator research demo
 
-Use this path for the complete showcase: AerialClaw Web UI, PX4/Gazebo SITL, sensor-enabled UAV model, camera/LiDAR bridge, and LLM-driven autonomous flight.
+Use this path for the complete showcase: AerialClaw Web UI, PX4/Gazebo SITL, AerialClaw's modified UAV model `x500_lidar_2d_cam`, camera/LiDAR bridge, and LLM-driven autonomous flight.
 
 First run on a simulator host:
 

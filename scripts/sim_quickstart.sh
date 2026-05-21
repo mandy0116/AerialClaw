@@ -12,7 +12,7 @@
 #   ./scripts/sim_quickstart.sh --setup          # first run: install/build prerequisites managed by this repo
 #   ./scripts/sim_quickstart.sh                  # next runs: start simulator + backend
 #   ./scripts/sim_quickstart.sh --restart        # stop previous repo-started stack, then start again
-#   ./scripts/sim_quickstart.sh default x500     # fallback standard PX4 world/model
+#   ./scripts/sim_quickstart.sh default x500     # control-debug fallback only; not the research showcase
 #
 # This script is intentionally conservative: it only kills processes that were
 # started through its own pid files unless --restart is given.
@@ -175,7 +175,7 @@ if ! "$SCRIPT_DIR/doctor_gazebo.sh" "$WORLD" "$MODEL"; then
   echo "First-time setup command:"
   echo "  ./scripts/sim_quickstart.sh --setup"
   echo ""
-  echo "Fallback standard PX4 path:"
+  echo "Control-debug fallback only, not the research showcase:"
   echo "  ./scripts/sim_quickstart.sh default x500"
   exit 1
 fi

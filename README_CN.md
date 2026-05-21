@@ -292,7 +292,7 @@ cd AerialClaw
 http://localhost:5001
 ```
 
-默认仿真演示使用 `urban_rescue` + `x500_lidar_2d_cam`。UI 打开后，初始化系统，检查 cockpit/摄像头面板，配置 LLM 渠道，切换到 AI 模式，即可尝试自然语言飞行指令。
+默认仿真演示使用 `urban_rescue` + AerialClaw 自己改造过的无人机模型 `x500_lidar_2d_cam`（前/后/左/右/下五路摄像头 + 2D LiDAR）。完整展示必须使用这个模型。UI 打开后，初始化系统，检查 cockpit/摄像头面板，配置 LLM 渠道，切换到 AI 模式，即可尝试自然语言飞行指令。
 
 详细仿真安装、健康检查、摄像头排障和 LLM/VLM 配置见 [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md)。
 

@@ -291,7 +291,7 @@ Then open:
 http://localhost:5001
 ```
 
-The default simulator demo uses `urban_rescue` + `x500_lidar_2d_cam`. After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
+The default simulator demo uses `urban_rescue` + AerialClaw's modified UAV model `x500_lidar_2d_cam` (front/rear/left/right/down cameras + 2D LiDAR). This model is required for the full showcase. After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
 
 Detailed simulator setup, health checks, camera troubleshooting, and LLM/VLM configuration are in [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
 

@@ -3,8 +3,8 @@
 # AerialClaw — PX4/Gazebo guided setup doctor
 # ============================================================
 # This is a user-facing diagnostic script. It does not install
-# or modify anything; it checks whether the optional PX4/Gazebo path
-# is configured well enough to start and explains the next command
+# or modify anything; it checks whether the PX4/Gazebo research-demo path
+# is configured with AerialClaw's modified UAV model and explains the next command
 # when something is missing.
 #
 # Usage:
@@ -27,8 +27,9 @@ for arg in "$@"; do
   esac
 done
 
-WORLD="${PX4_GZ_WORLD:-${ARGS[0]:-default}}"
-MODEL="${PX4_SIM_MODEL:-${ARGS[1]:-x500}}"
+WORLD="${PX4_GZ_WORLD:-${ARGS[0]:-urban_rescue}}"
+MODEL="${PX4_SIM_MODEL:-${ARGS[1]:-x500_lidar_2d_cam}}"
+SHOWCASE_MODEL="x500_lidar_2d_cam"
 
 PX4_BUILD="${PX4_DIR}/build/px4_sitl_default"
 PX4_BIN="${PX4_BUILD}/bin/px4"
@@ -149,18 +150,34 @@ else
   fail "World not installed into PX4. Run: ./scripts/setup_px4.sh"
 fi
 
+if [ "$MODEL" != "$SHOWCASE_MODEL" ]; then
+  warn "Current model '${MODEL}' is not the AerialClaw modified UAV model. Use '${SHOWCASE_MODEL}' for demos and artifact checks."
+fi
+
 if [ -d "$CUSTOM_MODEL_DIR" ]; then
   pass "Repository model source exists: sim/models/${MODEL}"
 elif [ "$MODEL" = "x500" ]; then
-  warn "Using PX4 standard x500 model; repository custom sensor model is not required."
+  warn "Using PX4 standard x500 model only for control debugging; this is not the full AerialClaw showcase."
 else
   fail "Repository model source missing: sim/models/${MODEL}"
+fi
+
+if [ "$MODEL" = "$SHOWCASE_MODEL" ] && [ -f "$CUSTOM_MODEL_DIR/model.sdf" ]; then
+  for required_sensor in cam_front cam_rear cam_left cam_right cam_down lidar_2d; do
+    if grep -q "$required_sensor" "$CUSTOM_MODEL_DIR/model.sdf"; then
+      pass "AerialClaw model defines sensor: ${required_sensor}"
+    else
+      fail "AerialClaw model is missing required sensor in repository SDF: ${required_sensor}"
+    fi
+  done
 fi
 
 if [ -d "$LOCAL_MODEL_DIR/$MODEL" ] || [ -d "$PX4_MODEL_DIR/$MODEL" ]; then
   pass "Gazebo can likely resolve model '${MODEL}'"
 else
-  if [ "$MODEL" = "x500" ]; then
+  if [ "$MODEL" = "$SHOWCASE_MODEL" ]; then
+    fail "AerialClaw modified UAV model '${MODEL}' is not installed. Run ./scripts/setup_px4.sh"
+  elif [ "$MODEL" = "x500" ]; then
     warn "x500 model not found in common model dirs yet. Run ./scripts/setup_px4.sh to download PX4-gazebo-models."
   else
     fail "Model '${MODEL}' not found in ~/.simulation-gazebo/models or PX4 model dir. Run ./scripts/setup_px4.sh"
@@ -192,6 +209,7 @@ fi
 printf "\n"
 info "6/7 Suggested commands"
 printf "  Setup once:      ./scripts/setup_px4.sh\n"
+printf "  Research demo:   ./scripts/sim_quickstart.sh\n"
 printf "  Start sim:       ./scripts/start_sim.sh %s %s\n" "$WORLD" "$MODEL"
 printf "  Start backend:   SIM_ADAPTER=px4 PX4_GZ_WORLD=%s PX4_SIM_MODEL=%s python server.py\n" "$WORLD" "$MODEL"
 printf "  Status checks:   curl http://localhost:5001/api/status && curl http://localhost:5001/api/sensor/status\n"
@@ -228,7 +246,7 @@ if [ "$LIVE" = "1" ]; then
       pass "Gazebo sensor topics detected"
       printf "%s\n" "$TOPICS" | grep -Ei "camera|image|lidar|scan|gpu_lidar" | sed 's/^/    /' | head -20
     else
-      warn "No Gazebo camera/LiDAR topics detected. Use sensor model x500_lidar_2d_cam or inspect with: gz topic -l"
+      warn "No Gazebo camera/LiDAR topics detected. Confirm the running model is x500_lidar_2d_cam, then inspect with: gz topic -l"
     fi
   fi
 else

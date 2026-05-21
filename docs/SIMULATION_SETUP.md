@@ -132,7 +132,7 @@ world: urban_rescue
 model: x500_lidar_2d_cam
 ```
 
-This sensor model publishes front/rear/left/right/down camera topics plus LiDAR. AerialClaw's backend sensor bridge subscribes to Gazebo Transport topics and forwards frames to the Web UI over Socket.IO.
+This is AerialClaw's modified UAV model, not the plain PX4 `x500`. It publishes front/rear/left/right/down camera topics plus 2D LiDAR. AerialClaw's backend sensor bridge subscribes to Gazebo Transport topics and forwards frames to the Web UI over Socket.IO. A demo machine is not considered fully configured until this model is installed, selected, and producing sensor topics.
 
 ### What the quickstart launches
 
@@ -210,15 +210,15 @@ Healthy signs:
 - `doctor_gazebo.sh --live` lists Gazebo camera/LiDAR topics.
 - The Web UI cockpit/camera panels show frames instead of `NO SIGNAL`.
 
-### Fallback standard PX4 path
+### Control-debug fallback only
 
-If the custom sensor model cannot be resolved on a machine, use PX4's standard X500 path to validate basic flight first:
+If the AerialClaw modified UAV model cannot be resolved on a machine, PX4's standard X500 path can validate basic flight control first:
 
 ```bash
 ./scripts/sim_quickstart.sh default x500
 ```
 
-The standard `x500` fallback is useful for PX4 control debugging, but it may not provide the full camera/LiDAR showcase. For the research demo, fix the `x500_lidar_2d_cam` model path and return to the default quickstart.
+The standard `x500` fallback is useful only for PX4 control debugging. It is **not** the research showcase and should not be used for paper demos or artifact checks. For the real AerialClaw demo, fix the `x500_lidar_2d_cam` model installation and return to the default quickstart.
 
 ### Manual Start (advanced)
 

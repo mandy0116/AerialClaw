@@ -7,6 +7,7 @@ def test_gazebo_guidance_scripts_are_present_and_syntax_valid():
         Path("scripts/doctor_gazebo.sh"),
         Path("scripts/setup_px4.sh"),
         Path("scripts/start_sim.sh"),
+        Path("scripts/sim_quickstart.sh"),
     ]
     for script in scripts:
         assert script.exists(), f"missing {script}"
@@ -28,5 +29,21 @@ def test_gazebo_doctor_mentions_actionable_run_path():
         "SIM_ADAPTER=px4",
         "/api/sensor/status",
         "--live",
+        "x500_lidar_2d_cam",
+        "AerialClaw modified UAV model",
     ]:
         assert expected in text
+
+
+def test_aerialclaw_modified_uav_model_is_required_for_showcase():
+    model = Path("sim/models/x500_lidar_2d_cam/model.sdf").read_text(encoding="utf-8")
+    for expected in ["cam_front", "cam_rear", "cam_left", "cam_right", "cam_down", "lidar_2d"]:
+        assert expected in model
+
+    setup = Path("scripts/setup_px4.sh").read_text(encoding="utf-8")
+    start = Path("scripts/start_sim.sh").read_text(encoding="utf-8")
+    docs = Path("docs/SIMULATION_SETUP.md").read_text(encoding="utf-8")
+
+    assert "AerialClaw modified UAV model" in setup
+    assert "The full AerialClaw research demo requires our modified UAV model" in start
+    assert "not** the research showcase" in docs

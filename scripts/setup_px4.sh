@@ -15,7 +15,7 @@
 #   2. Clones PX4-Autopilot (if not present)
 #   3. Applies macOS ARM64 build patches
 #   4. Downloads PX4 Gazebo base models
-#   5. Installs the bundled sensor model when present; otherwise falls back to PX4 x500
+#   5. Installs and verifies the bundled AerialClaw sensor UAV model
 #   6. Installs AerialClaw Gazebo worlds (urban_rescue)
 #   7. Builds PX4 SITL
 #   8. Installs Micro XRCE-DDS Agent (if not present)
@@ -133,18 +133,35 @@ fi
 
 # ── Step 4: Install AerialClaw Custom Model ────────────────────
 
-info "Checking AerialClaw bundled sensor model..."
+info "Installing and verifying the AerialClaw modified UAV model..."
 
-CUSTOM_MODEL_SRC="${PROJECT_DIR}/sim/models/x500_lidar_2d_cam"
-if [ -d "$CUSTOM_MODEL_SRC" ]; then
-    rm -rf "$MODEL_DIR/x500_lidar_2d_cam"
-    cp -r "$CUSTOM_MODEL_SRC" "$MODEL_DIR/"
-    ok "AerialClaw x500_lidar_2d_cam installed to $MODEL_DIR"
-else
-    warn "Bundled sensor model not found at $CUSTOM_MODEL_SRC"
-    echo "  Falling back to PX4 standard model: x500"
-    echo "  Use ./scripts/start_sim.sh default x500 for the fallback simulation path."
+AERIALCLAW_MODEL="x500_lidar_2d_cam"
+CUSTOM_MODEL_SRC="${PROJECT_DIR}/sim/models/${AERIALCLAW_MODEL}"
+CUSTOM_MODEL_DST="${MODEL_DIR}/${AERIALCLAW_MODEL}"
+if [ ! -d "$CUSTOM_MODEL_SRC" ]; then
+    err "Required AerialClaw modified UAV model is missing: $CUSTOM_MODEL_SRC"
+    echo "  The full research demo requires ${AERIALCLAW_MODEL}; PX4 standard x500 is only a control-debug fallback."
+    exit 1
 fi
+
+rm -rf "$CUSTOM_MODEL_DST"
+cp -r "$CUSTOM_MODEL_SRC" "$MODEL_DIR/"
+
+if [ ! -f "${CUSTOM_MODEL_DST}/model.sdf" ] || [ ! -f "${CUSTOM_MODEL_DST}/model.config" ]; then
+    err "AerialClaw model copy is incomplete: $CUSTOM_MODEL_DST"
+    exit 1
+fi
+
+for required_sensor in cam_front cam_rear cam_left cam_right cam_down lidar_2d; do
+    if ! grep -q "$required_sensor" "${CUSTOM_MODEL_DST}/model.sdf"; then
+        err "AerialClaw model verification failed: missing sensor '${required_sensor}' in model.sdf"
+        exit 1
+    fi
+done
+
+ok "AerialClaw modified UAV model installed and verified: ${CUSTOM_MODEL_DST}"
+echo "  Model: ${AERIALCLAW_MODEL}"
+echo "  Sensors: front/rear/left/right/down cameras + 2D LiDAR"
 
 # ── Step 5: Install Custom Gazebo Worlds ───────────────────────
 
@@ -247,9 +264,10 @@ echo "  2. Start simulation:  ./scripts/start_sim.sh urban_rescue x500_lidar_2d_
 echo "  3. Start AerialClaw:  SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py"
 echo "  4. Open browser:      http://localhost:5001"
 echo ""
-echo "Fallback without bundled sensors:"
+echo "Control-debug fallback only (not the research showcase):"
 echo "  ./scripts/start_sim.sh default x500"
 echo "  SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py"
+echo "  Return to x500_lidar_2d_cam before demos or paper artifact checks."
 echo ""
 if [ -x "${SCRIPT_DIR}/doctor_gazebo.sh" ]; then
     echo "Doctor summary:"
