@@ -166,8 +166,10 @@ The default Docker path is a prebuilt lightweight mock image. Users should not n
 ```bash
 docker compose up
 # or:
-docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 ```
+
+Maintainer note: GHCR packages must be set to **Public** in GitHub Packages before unauthenticated users can pull this image.
 
 Developer-only local build fallback:
 

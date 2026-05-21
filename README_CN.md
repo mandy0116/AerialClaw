@@ -202,7 +202,7 @@ docker compose up
 等价的普通 Docker 命令：
 
 ```bash
-docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 ```
 
 另开终端验证：
@@ -212,7 +212,9 @@ curl http://localhost:5001/api/status
 # 打开 http://localhost:5001
 ```
 
-默认 Compose 文件会拉取公开的预构建轻量 mock 镜像（`yjf0307/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
+默认 Compose 文件会拉取组织名下的预构建轻量 mock 镜像（`ghcr.io/xdei-group/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
+
+维护者注意：GHCR package 必须在 GitHub Packages 中设为 **Public**，未登录用户才能直接 pull。
 
 开发者本地构建 fallback：
 

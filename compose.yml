@@ -1,6 +1,6 @@
 services:
   aerialclaw:
-    image: yjf0307/aerialclaw:mock
+    image: ghcr.io/xdei-group/aerialclaw:mock
     pull_policy: missing
     environment:
       SIM_ADAPTER: mock

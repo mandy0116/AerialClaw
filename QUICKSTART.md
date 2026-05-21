@@ -22,7 +22,8 @@ cd AerialClaw
 docker compose up
 
 # Equivalent plain Docker command:
-# docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+# docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
+# If this reports unauthorized, the maintainer must set the GHCR package visibility to Public.
 ```
 
 Open `http://localhost:5001`, or verify in another terminal:
