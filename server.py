@@ -293,7 +293,7 @@ def _try_connect_adapter():
                 ok = init_adapter("gazebo_direct", connection_str=conn_str, timeout=10)
             else:
                 state.push_log("info", "Connecting to PX4 adapter (MAVSDK)...")
-                ok = init_adapter("px4", connection_str="udp://:14540", timeout=10)
+                ok = init_adapter("px4", connection_str=os.getenv("PX4_MAVSDK_URL", "udp://:14540"), timeout=int(os.getenv("PX4_CONNECT_TIMEOUT", "60")))
 
             adapter = get_adapter()
             if ok:
@@ -309,7 +309,10 @@ def _try_connect_adapter():
                 _start_airsim_camera_stream()
                 # 启动被动感知引擎
                 _start_passive_perception()
-            elif (sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1") and ok:
+            elif sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1":
+                # Gazebo camera/LiDAR topics are independent from MAVSDK control connectivity.
+                # Start the sensor bridge even if the PX4 adapter is still connecting or degraded,
+                # so the Web UI can show the AerialClaw modified UAV sensors as soon as Gazebo is up.
                 _start_sensor_bridge()
 
         except Exception as e:

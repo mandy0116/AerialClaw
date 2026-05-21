@@ -43,6 +43,7 @@ MODEL="${PX4_SIM_MODEL:-${ARGS[1]:-x500_lidar_2d_cam}}"
 HOST="${SERVER_HOST:-127.0.0.1}"
 PORT="${SERVER_PORT:-5001}"
 BASE_URL="http://${HOST}:${PORT}"
+GZ_PYTHONPATH="${GZ_PYTHONPATH:-}"
 
 SIM_PID_FILE="/tmp/aerialclaw_full_sim.pid"
 SERVER_PID_FILE="/tmp/aerialclaw_full_server.pid"
@@ -59,6 +60,35 @@ info() { printf "%b[INFO]%b %s\n" "$BLUE" "$NC" "$1"; }
 ok() { printf "%b[OK]%b %s\n" "$GREEN" "$NC" "$1"; }
 warn() { printf "%b[WARN]%b %s\n" "$YELLOW" "$NC" "$1"; }
 err() { printf "%b[ERROR]%b %s\n" "$RED" "$NC" "$1"; }
+
+python_version_tuple() {
+  "$1" - <<'PYVER' 2>/dev/null
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PYVER
+}
+
+python_is_supported() {
+  "$1" - <<'PYVER' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PYVER
+}
+
+find_supported_python() {
+  local candidates=()
+  if [ -n "${AERIALCLAW_PYTHON:-}" ]; then candidates+=("$AERIALCLAW_PYTHON"); fi
+  candidates+=("python3.12" "python3.11" "python3.10" "python3")
+  [ -x "${HOME}/.pyenv/shims/python3" ] && candidates+=("${HOME}/.pyenv/shims/python3")
+  [ -x "/opt/homebrew/bin/python3" ] && candidates+=("/opt/homebrew/bin/python3")
+  local candidate resolved
+  for candidate in "${candidates[@]}"; do
+    resolved=""
+    if [[ "$candidate" = /* ]] && [ -x "$candidate" ]; then resolved="$candidate"; elif command -v "$candidate" >/dev/null 2>&1; then resolved="$(command -v "$candidate")"; fi
+    if [ -n "$resolved" ] && python_is_supported "$resolved"; then printf "%s" "$resolved"; return 0; fi
+  done
+  return 1
+}
 
 is_pid_alive() {
   local pid="$1"
@@ -101,34 +131,100 @@ wait_http() {
 }
 
 ensure_python_env() {
-  if [ -x "$PROJECT_DIR/venv/bin/python" ]; then
-    PYTHON="$PROJECT_DIR/venv/bin/python"
-    ok "Using existing venv: $PYTHON"
-    return
+  local base_python
+  base_python="$(find_supported_python || true)"
+  if [ -z "$base_python" ]; then
+    err "Python >=3.10 is required. Set AERIALCLAW_PYTHON=/path/to/python3.11 and retry."
+    exit 1
   fi
 
-  if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
-    PYTHON="$PROJECT_DIR/.venv/bin/python"
-    ok "Using existing .venv: $PYTHON"
-    return
+  local existing_python=""
+  if [ -x "$PROJECT_DIR/venv/bin/python" ]; then
+    existing_python="$PROJECT_DIR/venv/bin/python"
+  elif [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+    existing_python="$PROJECT_DIR/.venv/bin/python"
+  fi
+
+  if [ -n "$existing_python" ]; then
+    if python_is_supported "$existing_python"; then
+      PYTHON="$existing_python"
+      ok "Using existing Python environment: $PYTHON ($(python_version_tuple "$PYTHON"))"
+      return
+    fi
+    if [ "$SETUP" = "1" ]; then
+      warn "Existing virtualenv uses unsupported Python $(python_version_tuple "$existing_python"); recreating venv with $base_python"
+      rm -rf "$PROJECT_DIR/venv"
+    else
+      err "Existing virtualenv uses unsupported Python $(python_version_tuple "$existing_python"). Run ./scripts/sim_quickstart.sh --setup to recreate it."
+      exit 1
+    fi
   fi
 
   if [ "$SETUP" = "1" ]; then
-    info "Creating Python virtual environment"
-    python3 -m venv "$PROJECT_DIR/venv"
+    info "Creating Python virtual environment with $base_python ($(python_version_tuple "$base_python"))"
+    "$base_python" -m venv "$PROJECT_DIR/venv"
     PYTHON="$PROJECT_DIR/venv/bin/python"
-    "$PYTHON" -m pip install --upgrade pip
+    "$PYTHON" -m pip install --upgrade pip wheel setuptools
     "$PYTHON" -m pip install -r "$PROJECT_DIR/requirements.txt"
     ok "Python dependencies installed"
     return
   fi
 
-  PYTHON="$(command -v python3 || true)"
-  if [ -z "$PYTHON" ]; then
-    err "python3 not found. Install Python >=3.10 or run with --setup after installing Python."
+  PYTHON="$base_python"
+  warn "No venv/.venv found; using Python: $PYTHON ($(python_version_tuple "$PYTHON"))"
+}
+
+ensure_app_python_deps() {
+  if "$PYTHON" -c "import flask, flask_socketio, flask_cors, mavsdk" >/dev/null 2>&1; then
+    ok "Backend Python dependencies are importable"
+    return
+  fi
+  if [ ! -f "$PROJECT_DIR/requirements.txt" ]; then
+    err "requirements.txt not found; cannot install backend Python dependencies."
     exit 1
   fi
-  warn "No venv/.venv found; using system python: $PYTHON"
+  info "Installing backend Python dependencies"
+  "$PYTHON" -m pip install -r "$PROJECT_DIR/requirements.txt"
+  ok "Backend Python dependencies installed"
+}
+
+ensure_gazebo_python_path() {
+  if "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
+    ok "Gazebo Python bindings are importable"
+    return
+  fi
+
+  local pyver transport_site msgs_site msgs_legacy_site combo
+  pyver="$($PYTHON - <<'PYVER'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PYVER
+)"
+
+  # Use only Gazebo Cellar paths. Do not add /opt/homebrew/lib/pythonX/site-packages,
+  # because that can shadow the venv with unrelated Homebrew packages.
+  local transport_candidates=("/opt/homebrew/Cellar/gz-transport13"/*"/lib/python${pyver}/site-packages")
+  local msgs_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python${pyver}/site-packages")
+  local msgs_legacy_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python")
+
+  for transport_site in "${transport_candidates[@]}"; do
+    [ -d "$transport_site/gz" ] || continue
+    for msgs_site in "${msgs_candidates[@]}"; do
+      [ -d "$msgs_site/gz" ] || continue
+      for msgs_legacy_site in "${msgs_legacy_candidates[@]}"; do
+        [ -d "$msgs_legacy_site/gz" ] || msgs_legacy_site=""
+        combo="$transport_site:$msgs_site${msgs_legacy_site:+:$msgs_legacy_site}"
+        if PYTHONPATH="$combo:${PYTHONPATH:-}" "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
+          GZ_PYTHONPATH="$combo${GZ_PYTHONPATH:+:$GZ_PYTHONPATH}"
+          export PYTHONPATH="$combo:${PYTHONPATH:-}"
+          ok "Gazebo Python bindings found: $combo"
+          return
+        fi
+      done
+    done
+  done
+
+  warn "Gazebo Python bindings are not importable from the current Python environment; camera panels may show NO SIGNAL."
 }
 
 ensure_frontend_build() {
@@ -141,7 +237,7 @@ ensure_frontend_build() {
     return
   fi
   info "Building Web UI"
-  (cd "$PROJECT_DIR/ui" && npm install && npm run build)
+  (cd "$PROJECT_DIR/ui" && npm install --no-audit --no-fund && npm run build)
   ok "Frontend built"
 }
 
@@ -160,19 +256,25 @@ if [ "$RESTART" = "1" ]; then
   stop_from_pid_file "$SIM_PID_FILE" "simulation launcher"
 fi
 
+ensure_python_env
+ensure_app_python_deps
+ensure_gazebo_python_path
+ensure_frontend_build
+
 if [ "$SETUP" = "1" ]; then
   info "Running first-time PX4/Gazebo setup"
   "$SCRIPT_DIR/setup_px4.sh"
 fi
 
-ensure_python_env
-ensure_frontend_build
-
 info "Running preflight doctor"
 if ! "$SCRIPT_DIR/doctor_gazebo.sh" "$WORLD" "$MODEL"; then
   err "Preflight doctor found blocking issues."
   echo ""
-  echo "First-time setup command:"
+  if [ ! -x "$PROJECT_DIR/PX4-Autopilot/build/px4_sitl_default/bin/px4" ]; then
+    echo "PX4 SITL binary is missing. Run the setup path once; it now installs PX4 Python build dependencies automatically:"
+  else
+    echo "First-time setup command:"
+  fi
   echo "  ./scripts/sim_quickstart.sh --setup"
   echo ""
   echo "Control-debug fallback only, not the research showcase:"
@@ -201,6 +303,7 @@ if [ -f "$SERVER_PID_FILE" ] && is_pid_alive "$(cat "$SERVER_PID_FILE")"; then
   warn "AerialClaw backend already running (PID $(cat "$SERVER_PID_FILE")). Use --restart to restart it."
 else
   info "Starting AerialClaw backend with PX4 adapter"
+  PYTHONPATH="${GZ_PYTHONPATH:+$GZ_PYTHONPATH:}${PYTHONPATH:-}" \
   SIM_ADAPTER=px4 PX4_GZ_WORLD="$WORLD" PX4_SIM_MODEL="$MODEL" SERVER_HOST="$HOST" SERVER_PORT="$PORT" \
     "$PYTHON" server.py >"$SERVER_LOG" 2>&1 &
   echo $! > "$SERVER_PID_FILE"
@@ -220,12 +323,34 @@ else
 fi
 
 info "Checking sensor bridge"
-if curl -fsS "$BASE_URL/api/sensor/status" >/tmp/aerialclaw_quickstart_sensor.json 2>/dev/null; then
-  ok "Sensor status endpoint reachable"
+SENSOR_READY=0
+for i in $(seq 1 45); do
+  if curl -fsS "$BASE_URL/api/sensor/status" >/tmp/aerialclaw_quickstart_sensor.json 2>/dev/null; then
+    if "$PYTHON" - <<'PYSENSOR'
+import json
+from pathlib import Path
+try:
+    data = json.loads(Path('/tmp/aerialclaw_quickstart_sensor.json').read_text())
+    raise SystemExit(0 if data.get('running') else 1)
+except Exception:
+    raise SystemExit(1)
+PYSENSOR
+    then
+      SENSOR_READY=1
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ "$SENSOR_READY" = "1" ]; then
+  ok "Sensor bridge is running"
   cat /tmp/aerialclaw_quickstart_sensor.json
   echo ""
 else
-  warn "Sensor status endpoint is not ready yet. Open the UI and inspect camera panels after PX4/Gazebo finishes spawning."
+  warn "Sensor bridge endpoint is reachable but not running yet. Latest status:"
+  cat /tmp/aerialclaw_quickstart_sensor.json 2>/dev/null || true
+  echo ""
+  warn "Run live diagnostics: ./scripts/doctor_gazebo.sh ${WORLD} ${MODEL} --live"
 fi
 
 printf "\n============================================================\n"

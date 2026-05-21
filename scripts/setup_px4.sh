@@ -17,9 +17,10 @@
 #   4. Downloads PX4 Gazebo base models
 #   5. Installs and verifies the bundled AerialClaw sensor UAV model
 #   6. Installs AerialClaw Gazebo worlds (urban_rescue)
-#   7. Builds PX4 SITL
-#   8. Installs Micro XRCE-DDS Agent (if not present)
-#   9. Runs a guided doctor summary
+#   7. Creates/reuses a project Python venv and installs PX4 build requirements
+#   8. Builds PX4 SITL
+#   9. Installs Micro XRCE-DDS Agent (if not present)
+#   10. Runs a guided doctor summary
 #
 # After running this script, use scripts/start_sim.sh to launch.
 # ============================================================
@@ -57,6 +58,229 @@ check_cmd() {
 MISSING=0
 check_cmd cmake "Install: brew install cmake (macOS) or apt install cmake (Ubuntu)" || MISSING=1
 check_cmd python3 "Install Python 3.10+" || MISSING=1
+
+PYTHON_BIN=""
+PIP_BIN=""
+BASE_PYTHON=""
+python_version_tuple() {
+    "$1" - <<'PYVER' 2>/dev/null
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PYVER
+}
+
+python_is_supported() {
+    "$1" - <<'PYVER' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PYVER
+}
+
+find_supported_python() {
+    local candidates=()
+    if [ -n "${AERIALCLAW_PYTHON:-}" ]; then
+        candidates+=("$AERIALCLAW_PYTHON")
+    fi
+    candidates+=("python3.12" "python3.11" "python3.10" "python3")
+    if [ -x "${HOME}/.pyenv/shims/python3" ]; then
+        candidates+=("${HOME}/.pyenv/shims/python3")
+    fi
+    if [ -x "/opt/homebrew/bin/python3" ]; then
+        candidates+=("/opt/homebrew/bin/python3")
+    fi
+
+    local candidate resolved
+    for candidate in "${candidates[@]}"; do
+        resolved=""
+        if [[ "$candidate" = /* ]] && [ -x "$candidate" ]; then
+            resolved="$candidate"
+        elif command -v "$candidate" >/dev/null 2>&1; then
+            resolved="$(command -v "$candidate")"
+        fi
+        if [ -n "$resolved" ] && python_is_supported "$resolved"; then
+            BASE_PYTHON="$resolved"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ensure_project_python_env() {
+    if ! find_supported_python; then
+        err "Python >=3.10 is required for AerialClaw/PX4 setup. Set AERIALCLAW_PYTHON=/path/to/python3.11 and retry."
+        exit 1
+    fi
+    ok "Base Python selected: $BASE_PYTHON ($(python_version_tuple "$BASE_PYTHON"))"
+
+    local existing_python=""
+    if [ -x "${PROJECT_DIR}/venv/bin/python" ]; then
+        existing_python="${PROJECT_DIR}/venv/bin/python"
+    elif [ -x "${PROJECT_DIR}/.venv/bin/python" ]; then
+        existing_python="${PROJECT_DIR}/.venv/bin/python"
+    fi
+
+    if [ -n "$existing_python" ]; then
+        if python_is_supported "$existing_python"; then
+            PYTHON_BIN="$existing_python"
+        else
+            warn "Existing virtualenv uses unsupported Python $(python_version_tuple "$existing_python"); recreating ${PROJECT_DIR}/venv with Python >=3.10"
+            rm -rf "${PROJECT_DIR}/venv"
+            "$BASE_PYTHON" -m venv "${PROJECT_DIR}/venv"
+            PYTHON_BIN="${PROJECT_DIR}/venv/bin/python"
+        fi
+    else
+        info "Creating project Python virtual environment for PX4 build dependencies..."
+        "$BASE_PYTHON" -m venv "${PROJECT_DIR}/venv"
+        PYTHON_BIN="${PROJECT_DIR}/venv/bin/python"
+    fi
+
+    PIP_BIN="$PYTHON_BIN -m pip"
+    # Make PX4/CMake discover the same Python environment when they call python/python3.
+    export PATH="$(dirname "$PYTHON_BIN"):${PATH}"
+
+    ok "Using Python environment: $PYTHON_BIN ($(python_version_tuple "$PYTHON_BIN"))"
+    "$PYTHON_BIN" -m pip install --upgrade pip wheel setuptools
+}
+
+install_python_requirements() {
+    local requirements_file="$1"
+    local label="$2"
+    if [ -f "$requirements_file" ]; then
+        info "Installing ${label} from ${requirements_file}"
+        local install_file="$requirements_file"
+        local tmp_requirements=""
+        # PX4 v1.15 requirements include legacy specifiers such as matplotlib>=3.0.*,
+        # which modern pip/packaging rejects. Sanitize only the temporary copy.
+        if grep -Eq ">=[0-9][0-9.]*\.\*" "$requirements_file"; then
+            tmp_requirements="$(mktemp)"
+            python3 - "$requirements_file" "$tmp_requirements" <<'PYREQ'
+import re
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+text = re.sub(r">=([0-9][0-9.]*)\.\*", lambda m: ">=" + m.group(1).rstrip('.'), text)
+open(dst, "w", encoding="utf-8").write(text)
+PYREQ
+            install_file="$tmp_requirements"
+            warn "Sanitized legacy wildcard requirements for modern pip"
+        fi
+        $PIP_BIN install -r "$install_file"
+        [ -n "$tmp_requirements" ] && rm -f "$tmp_requirements"
+        ok "${label} installed"
+    else
+        warn "Requirements file not found: $requirements_file"
+    fi
+}
+
+patch_px4_macos_gz_bridge() {
+    local cmake_file="${PX4_DIR}/src/modules/simulation/gz_bridge/CMakeLists.txt"
+    if [ ! -f "$cmake_file" ]; then
+        warn "PX4 gz_bridge CMake file not found: $cmake_file"
+        return
+    fi
+    if grep -q "AerialClaw macOS Homebrew protobuf target patch" "$cmake_file"; then
+        ok "PX4 gz_bridge protobuf patch already applied"
+        return
+    fi
+    info "Applying PX4 gz_bridge protobuf CMake patch for macOS/Homebrew..."
+    python3 - "$cmake_file" <<'PYPATCH'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = "# Find the gz_Transport library\n"
+patch = """# AerialClaw macOS Homebrew protobuf target patch
+# Homebrew gz-msgs may export protobuf::libprotobuf in its link interface
+# before protobuf has been imported into this CMake project. Import it first.
+find_package(protobuf CONFIG QUIET)
+if(NOT protobuf_FOUND)
+	find_package(Protobuf QUIET)
+endif()
+
+"""
+if patch.strip() not in text:
+    if needle not in text:
+        raise SystemExit(f"anchor not found in {path}")
+    text = text.replace(needle, patch + needle, 1)
+    path.write_text(text, encoding="utf-8")
+PYPATCH
+    ok "PX4 gz_bridge protobuf patch applied"
+}
+
+
+
+patch_px4_macos_common_flags() {
+    local cmake_file="${PX4_DIR}/cmake/px4_add_common_flags.cmake"
+    if [ ! -f "$cmake_file" ]; then
+        warn "PX4 common flags file not found: $cmake_file"
+        return
+    fi
+    if grep -q "AerialClaw macOS Clang warning compatibility patch" "$cmake_file"; then
+        ok "PX4 common flags warning compatibility patch already applied"
+        return
+    fi
+    # Upgrade an older AerialClaw VLA-only patch if present.
+    if grep -q "AerialClaw macOS Clang VLA warning patch" "$cmake_file"; then
+        python3 - "$cmake_file" <<'PYUPGRADE'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("AerialClaw macOS Clang VLA warning patch", "AerialClaw macOS Clang warning compatibility patch")
+anchor = "			-Wno-error=vla-cxx-extension
+"
+extra = "			-Wno-double-promotion
+			-Wno-error=double-promotion
+			-Wno-error=attributes
+"
+if "-Wno-error=double-promotion" not in text and anchor in text:
+    text = text.replace(anchor, anchor + extra, 1)
+path.write_text(text, encoding="utf-8")
+PYUPGRADE
+        ok "PX4 common flags warning compatibility patch upgraded"
+        return
+    fi
+    info "Applying PX4 common flags warning compatibility patch for modern macOS Clang..."
+    python3 - "$cmake_file" <<'PYFLAGS'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = """\t\t\t-Wno-varargs\n"""
+patch = """\t\t\t# AerialClaw macOS Clang VLA warning patch\n\t\t\t-Wno-vla\n\t\t\t-Wno-vla-cxx-extension\n\t\t\t-Wno-error=vla\n\t\t\t-Wno-error=vla-cxx-extension\n"""
+if patch.strip() not in text:
+    if needle not in text:
+        raise SystemExit(f"anchor not found in {path}")
+    text = text.replace(needle, needle + patch, 1)
+    path.write_text(text, encoding="utf-8")
+PYFLAGS
+    ok "PX4 common flags VLA patch applied"
+}
+
+patch_px4_macos_pxh_vla() {
+    local source_file="${PX4_DIR}/platforms/posix/src/px4/common/px4_daemon/pxh.cpp"
+    if [ ! -f "$source_file" ]; then
+        warn "PX4 pxh.cpp not found: $source_file"
+        return
+    fi
+    if grep -q "std::vector<const char \*> arg(words.size() + 1);" "$source_file"; then
+        ok "PX4 pxh.cpp VLA patch already applied"
+        return
+    fi
+    info "Applying PX4 pxh.cpp VLA patch for modern macOS Clang..."
+    python3 - "$source_file" <<'PYPXH'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old = """\t\tconst char *arg[words.size() + 1];\n\n\t\tfor (unsigned i = 0; i < words.size(); ++i) {\n\t\t\targ[i] = (char *)words[i].c_str();\n\t\t}\n\n\t\t// Explicitly set this nullptr.\n\t\targ[words.size()] = nullptr;\n\n\t\tint retval = _apps[command](words.size(), (char **)arg);\n"""
+new = """\t\tstd::vector<const char *> arg(words.size() + 1);\n\n\t\tfor (unsigned i = 0; i < words.size(); ++i) {\n\t\t\targ[i] = words[i].c_str();\n\t\t}\n\n\t\t// Explicitly set this nullptr.\n\t\targ[words.size()] = nullptr;\n\n\t\tint retval = _apps[command](words.size(), const_cast<char **>(arg.data()));\n"""
+if old not in text:
+    raise SystemExit(f"pxh.cpp VLA anchor not found in {path}")
+path.write_text(text.replace(old, new, 1), encoding="utf-8")
+PYPXH
+    ok "PX4 pxh.cpp VLA patch applied"
+}
 
 # Check Gazebo
 if command -v gz &>/dev/null; then
@@ -97,13 +321,17 @@ if [ "$OS" = "Darwin" ] && [ "$ARCH" = "arm64" ]; then
     # protobuf fix (brew keg-only)
     if [ -d "/opt/homebrew/Cellar/protobuf@33" ]; then
         PROTO_VER=$(ls /opt/homebrew/Cellar/protobuf@33/ | head -1)
-        export PKG_CONFIG_PATH="/opt/homebrew/Cellar/protobuf@33/${PROTO_VER}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-        ok "protobuf@33 PKG_CONFIG_PATH set"
+        PROTO_PREFIX="/opt/homebrew/Cellar/protobuf@33/${PROTO_VER}"
+        export PKG_CONFIG_PATH="${PROTO_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export CMAKE_PREFIX_PATH="${PROTO_PREFIX}:${PROTO_PREFIX}/lib/cmake/protobuf:${CMAKE_PREFIX_PATH:-}"
+        export protobuf_DIR="${PROTO_PREFIX}/lib/cmake/protobuf"
+        export Protobuf_DIR="${PROTO_PREFIX}/lib/cmake/protobuf"
+        ok "protobuf@33 CMake/pkg-config paths set"
     fi
 
     # VLA and attribute warnings (common on ARM64 clang)
-    export CFLAGS="${CFLAGS:-} -Wno-vla"
-    export CXXFLAGS="${CXXFLAGS:-} -Wno-vla -Wno-error=attributes"
+    export CFLAGS="${CFLAGS:-} -Wno-vla -Wno-error=vla"
+    export CXXFLAGS="${CXXFLAGS:-} -Wno-vla -Wno-vla-cxx-extension -Wno-error=vla -Wno-error=vla-cxx-extension -Wno-double-promotion -Wno-error=double-promotion -Wno-error=attributes"
 
     ok "macOS ARM64 patches applied"
 fi
@@ -180,7 +408,21 @@ else
     warn "Custom worlds not found or PX4 worlds dir missing."
 fi
 
-# ── Step 6: Build PX4 SITL ─────────────────────────────────────
+# ── Step 6: Python build dependencies ──────────────────────────
+
+ensure_project_python_env
+install_python_requirements "${PX4_DIR}/Tools/setup/requirements.txt" "PX4 Python build requirements"
+
+if ! python3 -c "import kconfiglib" >/dev/null 2>&1; then
+    err "PX4 Python dependency check failed: kconfiglib is still not importable from $(command -v python3)"
+    exit 1
+fi
+ok "PX4 Python dependency check passed (kconfiglib importable)"
+patch_px4_macos_gz_bridge
+patch_px4_macos_common_flags
+patch_px4_macos_pxh_vla
+
+# ── Step 7: Build PX4 SITL ─────────────────────────────────────
 
 info "Building PX4 SITL (this may take 10-30 minutes on first build)..."
 cd "$PX4_DIR"
@@ -194,11 +436,15 @@ if [ -f "build/px4_sitl_default/bin/px4" ]; then
     ok "PX4 SITL binary already exists. Skipping build."
     echo "  To rebuild: cd $PX4_DIR && make px4_sitl gz_x500"
 else
-    make px4_sitl gz_x500 2>&1 | tail -20
-    if [ -f "build/px4_sitl_default/bin/px4" ]; then
+    BUILD_LOG="/tmp/aerialclaw_px4_build.log"
+    if make px4_sitl gz_x500 >"$BUILD_LOG" 2>&1; then
         ok "PX4 SITL build successful!"
+    elif [ -f "build/px4_sitl_default/bin/px4" ]; then
+        warn "PX4 build command returned non-zero, but the SITL binary exists and will be used. Full log: $BUILD_LOG"
     else
-        err "PX4 build failed. Check the output above."
+        err "PX4 build failed. Full log: $BUILD_LOG"
+        echo "Last 160 build log lines:"
+        tail -160 "$BUILD_LOG" 2>/dev/null || true
         echo "Common fixes for macOS ARM64:"
         echo "  export CMAKE_POLICY_VERSION_MINIMUM=3.5"
         echo "  brew install protobuf@33"
@@ -212,7 +458,7 @@ pkill -f "gz sim" 2>/dev/null || true
 pkill -f "bin/px4" 2>/dev/null || true
 sleep 2
 
-# ── Step 7: Micro XRCE-DDS Agent ───────────────────────────────
+# ── Step 8: Micro XRCE-DDS Agent ───────────────────────────────
 
 if command -v MicroXRCEAgent &>/dev/null; then
     ok "MicroXRCEAgent already installed"
@@ -236,14 +482,14 @@ else
     fi
 fi
 
-# ── Step 8: Python dependencies ────────────────────────────────
+# ── Step 9: Runtime Python dependency check ────────────────────
 
 info "Checking Python mavsdk package..."
 if python3 -c "import mavsdk" 2>/dev/null; then
     ok "mavsdk Python package installed"
 else
-    info "Installing mavsdk..."
-    pip install mavsdk 2>/dev/null || pip3 install mavsdk
+    warn "mavsdk is not importable even after dependency installation. Installing it explicitly."
+    $PIP_BIN install mavsdk
     ok "mavsdk installed"
 fi
 

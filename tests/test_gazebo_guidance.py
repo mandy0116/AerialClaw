@@ -35,6 +35,14 @@ def test_gazebo_doctor_mentions_actionable_run_path():
         assert expected in text
 
 
+def test_sim_quickstart_handles_gazebo_python_bindings_without_polluting_venv():
+    text = Path("scripts/sim_quickstart.sh").read_text(encoding="utf-8")
+    assert "ensure_gazebo_python_path" in text
+    assert "Do not add /opt/homebrew/lib/pythonX/site-packages" in text
+    assert "GZ_PYTHONPATH" in text
+    assert "gz.transport13" in text
+
+
 def test_aerialclaw_modified_uav_model_is_required_for_showcase():
     model = Path("sim/models/x500_lidar_2d_cam/model.sdf").read_text(encoding="utf-8")
     for expected in ["cam_front", "cam_rear", "cam_left", "cam_right", "cam_down", "lidar_2d"]:
@@ -45,5 +53,7 @@ def test_aerialclaw_modified_uav_model_is_required_for_showcase():
     docs = Path("docs/SIMULATION_SETUP.md").read_text(encoding="utf-8")
 
     assert "AerialClaw modified UAV model" in setup
+    assert "PX4 Python build requirements" in setup
+    assert "AerialClaw macOS Clang warning compatibility patch" in setup
     assert "The full AerialClaw research demo requires our modified UAV model" in start
     assert "not** the research showcase" in docs
