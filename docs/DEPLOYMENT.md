@@ -166,7 +166,7 @@ The default Docker path is a prebuilt lightweight mock image. Users should not n
 ```bash
 docker compose up
 # or:
-docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+docker run --rm -p 5001:5001 xdei/aerialclaw:mock
 ```
 
 

@@ -12,7 +12,7 @@ cd AerialClaw
 docker compose up
 
 # Equivalent plain Docker command:
-# docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+# docker run --rm -p 5001:5001 xdei/aerialclaw:mock
 ```
 
 Verify:

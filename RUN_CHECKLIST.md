@@ -14,7 +14,7 @@ docker compose up
 curl http://localhost:5001/api/status
 
 # Equivalent plain Docker path
-docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+docker run --rm -p 5001:5001 xdei/aerialclaw:mock
 curl http://localhost:5001/api/status
 
 # Developer-only local build fallback

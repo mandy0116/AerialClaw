@@ -200,7 +200,7 @@ docker compose up
 等价的普通 Docker 命令：
 
 ```bash
-docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
+docker run --rm -p 5001:5001 xdei/aerialclaw:mock
 ```
 
 另开终端验证：
@@ -215,7 +215,7 @@ curl http://localhost:5001/api/status
 http://localhost:5001
 ```
 
-默认 Compose 文件会拉取预构建 Docker Hub 轻量 mock 镜像（`yjf0307/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
+默认 Compose 文件会拉取预构建 Docker Hub 轻量 mock 镜像（`xdei/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
 
 开发者本地构建 fallback：
 
