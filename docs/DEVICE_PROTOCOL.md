@@ -492,6 +492,50 @@ GET /api/devices
 
 ---
 
+## 本仓库可执行验证流程
+
+下面流程会真实启动 AerialClaw 后端、mock 仿真无人机和前端静态服务，并按本协议注册一台通用设备、上报状态/传感器数据、验证 WebSocket 心跳与 `device_action` 下发、通过 Socket.IO 执行 mock UAV 降落/起飞/飞行，最后检查 `/api/world` 与前端入口是否可访问。
+
+```bash
+# 1. 安装依赖并构建前端
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install pytest
+
+cd ui
+npm install
+npm run build
+cd ..
+
+# 2. 启动 mock 仿真后端
+SIM_ADAPTER=mock python server.py
+```
+
+另开一个终端执行完整协议验证：
+
+```bash
+source venv/bin/activate
+python scripts/verify_device_protocol_demo.py --base-url http://127.0.0.1:5001
+```
+
+成功时会看到：
+
+```text
+OK: DEVICE_PROTOCOL demo, mock UAV simulation, and frontend endpoint verified
+```
+
+可手动打开前端查看无人机状态：
+
+```text
+http://localhost:5001
+```
+
+> 说明：上述流程使用仓库内置 mock adapter，不依赖真实 PX4/Gazebo/AirSim。它验证的是本协议和 AerialClaw 前端/后端/仿真适配器的完整可执行闭环。真实 PX4 + Gazebo 接入仍属于单独的高级仿真环境验证。
+
+---
+
 ## 设备端实现指南
 
 ### 最小实现（ESP32/Arduino 级别）
