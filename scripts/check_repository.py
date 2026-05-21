@@ -35,8 +35,10 @@ REQUIRED_FILES = [
     "tests/test_mock_adapter.py",
     "tests/test_server_smoke.py",
     "scripts/smoke_mock.sh",
+    "scripts/smoke_mock.ps1",
     "scripts/doctor_gazebo.sh",
     "scripts/docker/start_gazebo_demo.sh",
+    ".gitattributes",
 ]
 
 STALE_PATTERNS = [
@@ -94,6 +96,11 @@ def main() -> None:
                     offenders.append(f"{path.relative_to(ROOT)}:{i}: {line.strip()}")
     if offenders:
         fail("stale repository references found:\n" + "\n".join(offenders))
+
+    for path in ROOT.glob("scripts/**/*.sh"):
+        data = path.read_bytes()
+        if b"\r\n" in data:
+            fail(f"shell script must use LF line endings, not CRLF: {path.relative_to(ROOT)}")
 
     absolute_duplicates = list((ROOT / "Users").glob("**/*")) if (ROOT / "Users").exists() else []
     if absolute_duplicates:

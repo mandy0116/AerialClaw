@@ -177,11 +177,19 @@
 
 ## 安装与部署
 
-AerialClaw 提供三条可运行路径。第一次使用或运行时建议先跑 Docker mock；本地开发走 local mock；需要完整仿真时再走 PX4/Gazebo。
+AerialClaw 有**三种运行目标**，但教程应该先按操作系统选环境，再选运行目标：
 
-### 路径 1 — 预构建 Docker mock 模式（推荐首次运行）
+| 运行目标 | 用途 | Windows 原生 PowerShell | Windows WSL2 Ubuntu | macOS | Linux |
+|---|---|---:|---:|---:|---:|
+| **容器 mock** | 首次运行 / 演示 / UI 检查 | ✅ 推荐 | ✅ | ✅ | ✅ |
+| **本地 mock** | 不启动仿真器的开发调试 | ✅ | ✅ | ✅ | ✅ |
+| **PX4 + Gazebo** | 完整仿真流程 | ❌ 走 WSL2 或 Docker | ✅ 推荐 | ✅ 进阶 | ✅ 推荐 |
 
-这是最快的可运行演示路径。它**不需要** PX4、Gazebo、AirSim、GPU、真实无人机、LLM API Key，也不需要在用户电脑上本地构建镜像。
+> Windows 注意：不要在 PowerShell 里直接跑 `scripts/*.sh` 来启动 PX4/Gazebo。这些脚本是给 Linux/macOS/WSL2 的 Bash 脚本。如果看到 `$'\r': command not found`、`set: pipefail` 或 `syntax error near unexpected token $'do\r'`，说明 shell 脚本被 Windows checkout 转成了 CRLF。仓库已加入 `.gitattributes`，强制 `*.sh` 保持 LF。
+
+### 1. 容器 mock 模式 —— 任意系统首次运行
+
+这是最快的可重复演示路径。它**不需要** PX4、Gazebo、AirSim、GPU、真实无人机、LLM API Key，也不需要在用户电脑上本地构建镜像。
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
@@ -204,31 +212,75 @@ curl http://localhost:5001/api/status
 # 打开 http://localhost:5001
 ```
 
-预期返回包含类似字段：
-
-```json
-{"initialized": true, "mode": "manual", "current_robot": "HOST_DEVICE"}
-```
-
 默认 Compose 文件会拉取公开的预构建轻量 mock 镜像（`yjf0307/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
 
-开发者如果明确需要本地构建，可以执行：
+开发者本地构建 fallback：
 
 ```bash
 docker compose -f compose.build.yml up --build
 ```
 
-如果这个开发者构建路径在加载 `python:3.12-slim` 或 `node:22-slim` metadata 时失败，例如 registry mirror（如 `registry.docker-cn.com`）返回 `TLS handshake timeout`，请修复 Docker Desktop 的镜像源/代理设置，或直接使用上面的预构建镜像路径。
+如果 fallback 在加载 `python:3.12-slim` 或 `node:22-slim` metadata 时失败，请使用上面的预构建镜像路径，或修复 Docker Desktop 镜像源/代理设置。
 
-更重的 Gazebo direct 演示镜像：
+可选的容器化 Gazebo direct 重镜像演示：
 
 ```bash
 docker compose -f compose.gazebo.yml up
 ```
 
-### 路径 2 — 本地 mock 模式（开发）
+### 2. 本地 mock 模式 —— 不启动 Gazebo 的开发流程
 
 适合本地改代码、不启动仿真器时使用。
+
+#### Windows PowerShell
+
+```powershell
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
+
+py -3.10 -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m pytest
+
+cd ui
+npm install
+npm run build
+cd ..
+
+$env:SIM_ADAPTER="mock"
+python server.py
+```
+
+Windows 可选一键 smoke gate：
+
+```powershell
+.\scripts\smoke_mock.ps1
+```
+
+#### Windows CMD
+
+```bat
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
+
+py -3.10 -m venv venv
+venv\Scripts\activate.bat
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m pytest
+
+cd ui
+npm install
+npm run build
+cd ..
+
+set SIM_ADAPTER=mock
+python server.py
+```
+
+#### macOS / Linux / WSL2 Ubuntu
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
@@ -236,22 +288,22 @@ cd AerialClaw
 
 python3 -m venv venv
 source venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+python -m pytest
 
 cd ui
 npm install
 npm run build
 cd ..
 
-# macOS / Linux
 SIM_ADAPTER=mock python server.py
+```
 
-# Windows PowerShell
-$env:SIM_ADAPTER="mock"; python server.py
+Unix 可选一键 smoke gate：
 
-# Windows CMD
-set SIM_ADAPTER=mock
-python server.py
+```bash
+bash scripts/smoke_mock.sh
 ```
 
 验证：
@@ -261,35 +313,56 @@ curl http://localhost:5001/api/status
 # 打开 http://localhost:5001
 ```
 
-提交改动前可跑本地 gate：
+### 3. PX4 + Gazebo 引导式仿真
 
-```bash
-bash scripts/smoke_mock.sh
+请先确认容器 mock 或本地 mock 已经跑通，再进入 PX4/Gazebo。这个目标更重，因为 PX4 SITL 和 Gazebo 是操作系统级仿真依赖。
+
+#### 支持环境
+
+- **推荐：** Linux 或 Windows WSL2 Ubuntu 22.04/24.04
+- **进阶：** macOS（需要自行装好 Gazebo/PX4 依赖）
+- **不支持：** Windows 原生 PowerShell 直接运行 `scripts/*.sh`
+
+#### Windows：用 WSL2 Ubuntu 跑 PX4/Gazebo
+
+先在 Windows PowerShell 中安装/进入 WSL2：
+
+```powershell
+wsl --install -d Ubuntu-24.04
+wsl
 ```
 
-### 路径 3 — PX4 + Gazebo 引导式仿真
-
-建议在路径 1 或路径 2 跑通后再使用。该路径更重，因为 PX4 SITL 和 Gazebo 是系统级仿真依赖。仓库提供 doctor/setup/start 引导流程，避免手工猜路径。
-
-前置要求：
-
-- Python >= 3.10，Node.js >= 18
-- Git 与 CMake >= 3.22
-- Gazebo Harmonic CLI（`gz`）
-- 首次 PX4 build 通常需要 10-30 分钟，取决于机器性能
+进入 Ubuntu/WSL 终端后：
 
 ```bash
-# 1）只读诊断。会说明缺什么，以及下一步该执行什么命令。
-./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+sudo apt update
+sudo apt install -y git curl python3 python3-venv nodejs npm cmake build-essential
 
-# 2）首次配置。克隆/编译 PX4，并安装 AerialClaw world/model。
-./scripts/setup_px4.sh
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
 
-# 3）启动 DDS Agent + Gazebo + PX4 SITL。保持该终端打开。
-./scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+bash scripts/setup_px4.sh
+bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
 ```
 
-另开终端启动 AerialClaw 后端：
+另开一个 WSL 终端启动 AerialClaw 后端：
+
+```bash
+cd AerialClaw
+source venv/bin/activate  # 如果使用虚拟环境
+SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
+```
+
+#### Linux / macOS
+
+```bash
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+bash scripts/setup_px4.sh
+bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
+```
+
+另开终端：
 
 ```bash
 source venv/bin/activate  # 如果使用虚拟环境
@@ -301,18 +374,18 @@ SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python
 ```bash
 curl http://localhost:5001/api/status
 curl http://localhost:5001/api/sensor/status
-./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
 # 打开 http://localhost:5001
 ```
 
 如果本机无法解析仓库自带传感器模型，可用 PX4 标准 fallback：
 
 ```bash
-./scripts/start_sim.sh default x500
+bash scripts/start_sim.sh default x500
 SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py
 ```
 
-启动器会打印常用日志路径：
+常见日志位置：
 
 ```text
 /tmp/aerialclaw_dds.log
@@ -321,6 +394,26 @@ SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py
 ```
 
 手动仿真排障见 [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md)。
+
+#### Windows CRLF / Bash 排障
+
+如果 Bash 输出：
+
+```text
+$'\r': command not found
+set: pipefail: invalid option name
+syntax error near unexpected token `$'do\r''
+```
+
+在 Git Bash 或 WSL2 中修复 checkout 换行后重试：
+
+```bash
+git config core.autocrlf false
+git reset --hard HEAD
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+```
+
+本版本后的 fresh clone 会通过 `.gitattributes` 自动保持 shell 脚本 LF 换行。
 
 ### 可选 LLM 配置
 

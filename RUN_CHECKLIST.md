@@ -23,7 +23,11 @@ docker compose -f compose.build.yml up --build
 # Optional heavier Gazebo direct image
 docker compose -f compose.gazebo.yml up
 
-# Local fallback path
+# Local fallback path (Windows PowerShell)
+.\scripts\smoke_mock.ps1
+$env:SIM_ADAPTER="mock"; python server.py
+
+# Local fallback path (macOS / Linux / WSL2)
 python -m compileall -q .
 python -m pytest
 bash scripts/smoke_mock.sh
@@ -38,7 +42,9 @@ SIM_ADAPTER=mock python server.py
 - `tests/test_server_smoke.py` validates Flask app import and `/api/status`.
 - `tests/test_repository_consistency.py` runs the repository consistency checker.
 - `scripts/check_repository.py` fails on stale documentation references, missing repository files, or accidental absolute-path duplicate trees.
-- `scripts/smoke_mock.sh` runs the complete local mock demo smoke gate.
+- `scripts/smoke_mock.sh` runs the Unix local mock demo smoke gate.
+- `scripts/smoke_mock.ps1` runs the Windows PowerShell local mock demo smoke gate.
+- `.gitattributes` pins shell scripts to LF so Windows checkouts do not break Bash scripts with CRLF.
 - `scripts/doctor_gazebo.sh` checks the optional PX4/Gazebo path and prints actionable next steps without modifying the system.
 - `.github/workflows/ci.yml` runs repository checks, Python compile, pytest, Web UI lint/build, Docker image build, and a Docker `/api/status` smoke test.
 - `.github/workflows/docker-images.yml` publishes prebuilt GHCR images for mock and Gazebo paths.
@@ -55,13 +61,13 @@ The quick repository package is intentionally mock mode. PX4/Gazebo is the guide
 For PX4/Gazebo validation, use:
 
 ```bash
-./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
-./scripts/setup_px4.sh
-./scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+bash scripts/setup_px4.sh
+bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
 SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
 curl http://localhost:5001/api/status
 curl http://localhost:5001/api/sensor/status
-./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
+bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
 ```
 
 The public repository should not claim shipped SDKs for clients that are only protocol examples/planned integration targets. Device integration should be evaluated through `docs/DEVICE_PROTOCOL.md` unless a concrete SDK is present in the repository.
