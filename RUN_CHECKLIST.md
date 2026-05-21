@@ -14,7 +14,7 @@ docker compose up
 curl http://localhost:5001/api/status
 
 # Equivalent plain Docker path
-docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
+docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
 curl http://localhost:5001/api/status
 
 # Developer-only local build fallback
@@ -48,7 +48,7 @@ SIM_ADAPTER=mock python server.py
 - `scripts/doctor_gazebo.sh` checks the optional PX4/Gazebo path and prints actionable next steps without modifying the system.
 - `.github/workflows/ci.yml` runs repository checks, Python compile, pytest, Web UI lint/build, Docker image build, and a Docker `/api/status` smoke test.
 - `.github/workflows/docker-images.yml` publishes prebuilt GHCR images for mock and Gazebo paths.
-- GHCR package visibility must be public before the documented `ghcr.io/xdei-group/aerialclaw:*` pulls work without login.
+- GHCR workflow remains available for future organization-owned images; package visibility must be public before switching user docs to GHCR.
 - `Dockerfile` builds a lightweight mock mode image using `requirements-mock.txt`.
 - `Dockerfile.gazebo` builds the heavier Gazebo direct demo image.
 - `compose.yml` provides a prebuilt `docker compose up` user path with a `/api/status` healthcheck.

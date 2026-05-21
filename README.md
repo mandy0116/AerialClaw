@@ -201,7 +201,7 @@ docker compose up
 Equivalent plain Docker command:
 
 ```bash
-docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
+docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
 ```
 
 Verify in another terminal:
@@ -211,9 +211,8 @@ curl http://localhost:5001/api/status
 # Open http://localhost:5001
 ```
 
-The default Compose file pulls a prebuilt organization mock image (`ghcr.io/xdei-group/aerialclaw:mock`) that uses `requirements-mock.txt`, so users do not need to build from `python:3.12-slim` or `node:22-slim` locally.
+The default Compose file pulls a prebuilt Docker Hub mock image (`yjf0307/aerialclaw:mock`) that uses `requirements-mock.txt`, so users do not need to build from `python:3.12-slim` or `node:22-slim` locally.
 
-Maintainer note: the GHCR package must be set to **Public** in GitHub Packages before unauthenticated users can pull it.
 
 Developer-only local image build fallback:
 
