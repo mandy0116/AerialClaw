@@ -60,9 +60,9 @@ Optional smoke gate:
 bash scripts/smoke_mock.sh
 ```
 
-## 3. Simulator integration
+## Optional: PX4 + Gazebo simulator integration
 
-PX4 + Gazebo is an advanced integration path. Validate the target simulator host before using simulator-specific commands.
+You can stop after section 1 or section 2. This is not a required third step. Use this path only when you want to connect AerialClaw to a full PX4 + Gazebo simulator. Validate the target simulator host before using simulator-specific commands.
 
 See:
 

@@ -214,8 +214,6 @@ Then open:
 http://localhost:5001
 ```
 
-The default Compose file pulls a prebuilt Docker Hub mock image (`xdei/aerialclaw:mock`) that uses `requirements-mock.txt`, so users do not need to build from `python:3.12-slim` or `node:22-slim` locally.
-
 Developer-only local image build fallback:
 
 ```bash
@@ -269,17 +267,17 @@ The repository includes a PowerShell smoke script for Windows users:
 
 Use this path from a normal Windows Python/Node environment after installing Python 3.10+ and Node.js. If a Windows checkout changes shell-script line endings, `.gitattributes` keeps repository shell scripts configured for LF on subsequent clean checkouts.
 
-### 3. Simulator integration
+### Optional: PX4 + Gazebo simulator integration
 
-PX4 + Gazebo integration is maintained as an advanced simulator path. Because it depends on host OS packages, graphics/driver state, PX4 SITL, and Gazebo installation details, do not treat it as a generic one-command README quick start.
+You can stop after **Container mock mode** or **Local mock mode** if you only need the public demo or source-code development environment. PX4 + Gazebo is not the next step after modes 1 or 2; it is a separate advanced path for users who want to connect AerialClaw to a full simulator.
 
-Use the simulator documentation only after validating the target environment:
+Because simulator integration depends on host OS packages, graphics/driver state, PX4 SITL, and Gazebo installation details, validate the target environment before using simulator-specific commands. Start here:
 
 ```text
 docs/SIMULATION_SETUP.md
 ```
 
-The Compose entry for the heavier Gazebo image is kept separate from the default mock path:
+The heavier Gazebo Compose entry is kept separate from the default mock path:
 
 ```bash
 docker compose -f compose.gazebo.yml config

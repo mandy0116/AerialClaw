@@ -215,8 +215,6 @@ curl http://localhost:5001/api/status
 http://localhost:5001
 ```
 
-默认 Compose 文件会拉取预构建 Docker Hub 轻量 mock 镜像（`xdei/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
-
 开发者本地构建 fallback：
 
 ```bash
@@ -270,17 +268,17 @@ bash scripts/smoke_mock.sh
 
 请在安装 Python 3.10+ 和 Node.js 的普通 Windows 环境中使用。若 Windows checkout 改变 shell 脚本换行，仓库中的 `.gitattributes` 会保证后续 clean checkout 使用适合 Bash 的 LF 配置。
 
-### 3. 仿真器集成
+### 可选：PX4 + Gazebo 仿真器集成
 
-PX4 + Gazebo 是高级仿真集成路径。它依赖宿主机系统包、图形/驱动状态、PX4 SITL 和 Gazebo 安装细节，因此不作为 README 中的通用一键快速启动。
+如果只是运行公开演示或做源码开发，执行完 **容器 mock 模式** 或 **本地 mock 模式** 就可以停止。PX4 + Gazebo 不是模式 1/2 后必须继续执行的第三步，而是给需要接入完整仿真器的用户准备的独立高级路径。
 
-目标环境验证后，再使用专门的仿真文档：
+仿真器集成依赖宿主机系统包、图形/驱动状态、PX4 SITL 和 Gazebo 安装细节；使用具体仿真命令前，先验证目标环境。从这里开始：
 
 ```text
 docs/SIMULATION_SETUP.md
 ```
 
-较重的 Gazebo 镜像 Compose 入口与默认 mock 路径分离：
+较重的 Gazebo Compose 入口与默认 mock 路径分离：
 
 ```bash
 docker compose -f compose.gazebo.yml config
