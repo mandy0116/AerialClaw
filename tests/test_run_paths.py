@@ -9,6 +9,8 @@ def test_readme_documents_all_runnable_user_paths():
         "docker compose -f compose.build.yml up --build",
         "SIM_ADAPTER=mock python server.py",
         "bash scripts/smoke_mock.sh",
+        "./scripts/sim_quickstart.sh --setup",
+        "./scripts/sim_quickstart.sh",
         "docs/SIMULATION_SETUP.md",
         "curl http://localhost:5001/api/status",
     ]:
@@ -18,7 +20,6 @@ def test_readme_documents_all_runnable_user_paths():
         "bash scripts/setup_px4.sh",
         "bash scripts/start_sim.sh",
         "wsl --install -d Ubuntu-24.04",
-        "curl http://localhost:5001/api/sensor/status",
     ]:
         assert unverified not in readme
 

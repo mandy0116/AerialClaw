@@ -177,7 +177,7 @@
 
 ## 安装与部署
 
-README 只保留当前仓库包中定期验证的启动路径。仿真器集成会受宿主机系统、驱动、PX4/Gazebo 安装状态影响；相关命令应在目标环境实测后放入专门的仿真文档，而不是写成通用快速启动。
+README 提供两级入口：轻量 mock 路径用于快速检查 UI/API，PX4 + Gazebo 完整仿真路径用于展示自主飞行、仿真传感器和 LLM 驱动控制能力。仿真路径依赖宿主机系统包、图形驱动、PX4 SITL 和 Gazebo，因此提供引导脚本和专门的配置文档。
 
 ### 运行模式
 
@@ -185,7 +185,7 @@ README 只保留当前仓库包中定期验证的启动路径。仿真器集成�
 |---|---|---|
 | **容器 mock** | 使用预构建镜像进行快速演示和 UI/API smoke test | 已验证路径 |
 | **本地 mock** | 不连接外部仿真器的源码开发调试 | 已验证路径 |
-| **PX4 + Gazebo 集成** | 面向研究实验的完整仿真集成 | 高级集成路径；使用前需在目标仿真主机验证 |
+| **PX4 + Gazebo 完整仿真** | SITL 飞行、摄像头/LiDAR 桥接、AI 模式的研究演示 | 核心展示路径；在仿真主机上运行引导配置 |
 
 ### 1. 容器 mock 模式 —— 已验证快速启动
 
@@ -268,15 +268,33 @@ bash scripts/smoke_mock.sh
 
 请在安装 Python 3.10+ 和 Node.js 的普通 Windows 环境中使用。若 Windows checkout 改变 shell 脚本换行，仓库中的 `.gitattributes` 会保证后续 clean checkout 使用适合 Bash 的 LF 配置。
 
-### 可选：PX4 + Gazebo 仿真器集成
+### 3. PX4 + Gazebo 完整仿真模式 —— 研究演示路径
 
-如果只是运行公开演示或做源码开发，执行完 **容器 mock 模式** 或 **本地 mock 模式** 就可以停止。PX4 + Gazebo 不是模式 1/2 后必须继续执行的第三步，而是给需要接入完整仿真器的用户准备的独立高级路径。
+当你要展示完整能力时使用这条路径：AerialClaw Web UI、PX4/Gazebo SITL、带传感器的无人机模型、摄像头/LiDAR 桥接，以及 LLM 驱动的自主飞行。
 
-仿真器集成依赖宿主机系统包、图形/驱动状态、PX4 SITL 和 Gazebo 安装细节；使用具体仿真命令前，先验证目标环境。从这里开始：
+仿真主机首次运行：
+
+```bash
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
+./scripts/sim_quickstart.sh --setup
+```
+
+后续运行：
+
+```bash
+./scripts/sim_quickstart.sh
+```
+
+然后打开：
 
 ```text
-docs/SIMULATION_SETUP.md
+http://localhost:5001
 ```
+
+默认仿真演示使用 `urban_rescue` + `x500_lidar_2d_cam`。UI 打开后，初始化系统，检查 cockpit/摄像头面板，配置 LLM 渠道，切换到 AI 模式，即可尝试自然语言飞行指令。
+
+详细仿真安装、健康检查、摄像头排障和 LLM/VLM 配置见 [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md)。
 
 较重的 Gazebo Compose 入口与默认 mock 路径分离：
 

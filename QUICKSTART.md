@@ -1,6 +1,9 @@
 # AerialClaw Quickstart
 
-This quickstart contains only the repository paths that are verified for the public package.
+This quickstart has two levels:
+
+1. **Mock mode** for a fast Web UI/API smoke test.
+2. **PX4 + Gazebo full simulator mode** for the research demo: SITL flight, camera/LiDAR bridge, Web UI, and LLM-driven autonomous commands.
 
 ## 1. Container mock mode
 
@@ -60,12 +63,34 @@ Optional smoke gate:
 bash scripts/smoke_mock.sh
 ```
 
-## Optional: PX4 + Gazebo simulator integration
+## 3. PX4 + Gazebo full simulator research demo
 
-You can stop after section 1 or section 2. This is not a required third step. Use this path only when you want to connect AerialClaw to a full PX4 + Gazebo simulator. Validate the target simulator host before using simulator-specific commands.
+Use this path for the complete showcase: AerialClaw Web UI, PX4/Gazebo SITL, sensor-enabled UAV model, camera/LiDAR bridge, and LLM-driven autonomous flight.
 
-See:
+First run on a simulator host:
+
+```bash
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
+./scripts/sim_quickstart.sh --setup
+```
+
+Later runs:
+
+```bash
+./scripts/sim_quickstart.sh
+```
+
+Open:
 
 ```text
-docs/SIMULATION_SETUP.md
+http://localhost:5001
 ```
+
+Then initialize the system, check camera panels, configure an LLM provider, switch to AI mode, and try:
+
+```text
+Take off to 15 meters and observe the surroundings.
+```
+
+Details: [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md)

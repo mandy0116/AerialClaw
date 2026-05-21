@@ -37,6 +37,7 @@ REQUIRED_FILES = [
     "scripts/smoke_mock.sh",
     "scripts/smoke_mock.ps1",
     "scripts/doctor_gazebo.sh",
+    "scripts/sim_quickstart.sh",
     "scripts/docker/start_gazebo_demo.sh",
     ".gitattributes",
 ]

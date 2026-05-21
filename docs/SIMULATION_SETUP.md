@@ -101,57 +101,124 @@ mkdir -p ~/.simulation-gazebo/models
 # Download from https://github.com/PX4/PX4-gazebo-models if needed
 ```
 
-## Running the Simulation
+## Running the Full Research Demo
 
-### Guided Start (recommended for users)
+This is the main path for research demonstrations. It is designed for the ACM MM-style showcase: the project boots, PX4/Gazebo boots, the Web console opens, camera/LiDAR bridge status is visible, and an LLM-configured operator can immediately try natural-language flight tasks.
 
-Use the repository scripts instead of manually guessing PX4/Gazebo paths. The
-flow is: doctor → setup → start simulator → start backend → verify status.
+### One-command quickstart
+
+For the first run on a machine that already has basic host tools installed, use:
 
 ```bash
-# 1) Read-only diagnosis. It prints exactly what is missing.
+./scripts/sim_quickstart.sh --setup
+```
+
+For later runs:
+
+```bash
+./scripts/sim_quickstart.sh
+```
+
+If an earlier run is still alive and you want a clean restart:
+
+```bash
+./scripts/sim_quickstart.sh --restart
+```
+
+The default research demo uses:
+
+```text
+world: urban_rescue
+model: x500_lidar_2d_cam
+```
+
+This sensor model publishes front/rear/left/right/down camera topics plus LiDAR. AerialClaw's backend sensor bridge subscribes to Gazebo Transport topics and forwards frames to the Web UI over Socket.IO.
+
+### What the quickstart launches
+
+`sim_quickstart.sh` coordinates the whole stack:
+
+| Layer | Started by | Result |
+|---|---|---|
+| PX4/Gazebo setup | `scripts/setup_px4.sh` when `--setup` is used | PX4 checkout/build, Gazebo models/worlds, Micro XRCE-DDS Agent, MAVSDK Python dependency |
+| Simulator | `scripts/start_sim.sh urban_rescue x500_lidar_2d_cam` | Micro XRCE-DDS Agent, Gazebo server, PX4 SITL |
+| AerialClaw backend | `SIM_ADAPTER=px4 ... python server.py` | Web console and PX4 adapter on `http://localhost:5001` |
+| Sensor bridge | backend auto-start after adapter connection | camera/LiDAR frames emitted to the Web UI |
+| LLM provider | `.env` or Web UI Model Configuration | AI mode can plan and execute natural-language flight tasks |
+
+After the script reports success, open:
+
+```text
+http://localhost:5001
+```
+
+Recommended first demo:
+
+1. Click **Initialize System**.
+2. Check the cockpit/camera panels. The front camera should show live simulator frames after the model finishes spawning.
+3. Configure an LLM provider if not already configured.
+4. Switch to AI mode.
+5. Try: `Take off to 15 meters and observe the surroundings.`
+
+### LLM configuration for autonomous flight
+
+Mock UI and manual checks do not need an LLM key. Autonomous planning does.
+
+Fast file-based setup:
+
+```bash
+cp .env.example .env
+# Edit these fields:
+# ACTIVE_PROVIDER=openai
+# LLM_BASE_URL=https://api.openai.com/v1
+# LLM_API_KEY=...
+# LLM_MODEL=gpt-4o
+# VLM_BASE_URL=https://api.openai.com/v1
+# VLM_API_KEY=...
+# VLM_MODEL=gpt-4o
+
+./scripts/sim_quickstart.sh --restart
+```
+
+You can also use the Web UI **Model Configuration** panel to add or switch OpenAI-compatible providers. The VLM settings are used when AerialClaw analyzes camera images.
+
+### Verification commands
+
+Use these when preparing a demo machine:
+
+```bash
+# Read-only preflight before starting
 ./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
 
-# 2) First-time setup. This can take 10-30 minutes because PX4 is built locally.
-./scripts/setup_px4.sh
+# Start the complete stack
+./scripts/sim_quickstart.sh
 
-# 3) Start DDS Agent + Gazebo + PX4 SITL. Keep this terminal open.
-./scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
-
-# 4) In another terminal, start AerialClaw against PX4/Gazebo.
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
-
-# 5) Verify backend and sensor bridge status.
+# Backend is alive
 curl http://localhost:5001/api/status
+
+# Sensor bridge is reachable
 curl http://localhost:5001/api/sensor/status
 
-# 6) Optional live diagnosis after the simulator is running.
+# Live simulator/topic diagnosis
 ./scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
 ```
 
-If the bundled sensor model cannot be resolved locally, use the standard PX4
-fallback path:
+Healthy signs:
+
+- `/api/status` returns `initialized` / `current_robot` fields after initialization.
+- `/api/sensor/status` is reachable after the PX4 adapter connects.
+- `doctor_gazebo.sh --live` lists Gazebo camera/LiDAR topics.
+- The Web UI cockpit/camera panels show frames instead of `NO SIGNAL`.
+
+### Fallback standard PX4 path
+
+If the custom sensor model cannot be resolved on a machine, use PX4's standard X500 path to validate basic flight first:
 
 ```bash
-./scripts/start_sim.sh default x500
-SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py
+./scripts/sim_quickstart.sh default x500
 ```
 
-### What the scripts do
-
-| Script | Mutates system? | Purpose |
-|--------|------------------|---------|
-| `scripts/doctor_gazebo.sh` | No | Checks Gazebo, PX4 checkout/build, worlds, models, MicroXRCEAgent, MAVSDK, and optional live processes/topics. |
-| `scripts/setup_px4.sh` | Yes | Clones/builds PX4, downloads PX4 models, copies AerialClaw worlds and bundled sensor model, checks MAVSDK pieces. |
-| `scripts/start_sim.sh` | Starts processes | Starts Micro XRCE-DDS Agent, Gazebo server, and PX4 SITL with clear log locations. |
-
-Log files printed by `scripts/start_sim.sh`:
-
-```text
-/tmp/aerialclaw_dds.log
-/tmp/aerialclaw_gz.log
-/tmp/aerialclaw_px4.log
-```
+The standard `x500` fallback is useful for PX4 control debugging, but it may not provide the full camera/LiDAR showcase. For the research demo, fix the `x500_lidar_2d_cam` model path and return to the default quickstart.
 
 ### Manual Start (advanced)
 

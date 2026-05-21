@@ -176,7 +176,7 @@ The system supports **real-time Manual / AI mode switching**, allowing operators
 
 ## Installation and Deployment
 
-This README lists only the startup paths that are routinely checked for this repository package. Platform-specific simulator integration can differ by host, driver, and simulator installation; keep those commands in the dedicated simulation documents after validating them in the target environment.
+This README gives two entry levels: a lightweight mock path for quick UI/API checks, and the full PX4 + Gazebo research-demo path for showcasing autonomous aerial operation with simulator sensors and LLM-driven flight. The simulator path includes a guided script plus a dedicated setup guide because it depends on host OS packages, graphics drivers, PX4 SITL, and Gazebo.
 
 ### Runtime modes
 
@@ -184,7 +184,7 @@ This README lists only the startup paths that are routinely checked for this rep
 |---|---|---|
 | **Container mock** | Fast demo and UI/API smoke test with a prebuilt image | Verified path |
 | **Local mock** | Source checkout development without an external simulator | Verified path |
-| **PX4 + Gazebo integration** | Full simulator integration for research experiments | Advanced integration; validate on the target simulator host before use |
+| **PX4 + Gazebo full simulator** | Research demo with SITL flight, camera/LiDAR bridge, and AI mode | Main showcase path; run the guided setup on the simulator host |
 
 ### 1. Container mock mode — verified quick start
 
@@ -267,15 +267,33 @@ The repository includes a PowerShell smoke script for Windows users:
 
 Use this path from a normal Windows Python/Node environment after installing Python 3.10+ and Node.js. If a Windows checkout changes shell-script line endings, `.gitattributes` keeps repository shell scripts configured for LF on subsequent clean checkouts.
 
-### Optional: PX4 + Gazebo simulator integration
+### 3. PX4 + Gazebo full simulator mode — research demo path
 
-You can stop after **Container mock mode** or **Local mock mode** if you only need the public demo or source-code development environment. PX4 + Gazebo is not the next step after modes 1 or 2; it is a separate advanced path for users who want to connect AerialClaw to a full simulator.
+Use this path when you want the complete showcase: AerialClaw Web UI, PX4/Gazebo SITL, sensor-enabled UAV model, camera/LiDAR bridge, and LLM-driven autonomous flight.
 
-Because simulator integration depends on host OS packages, graphics/driver state, PX4 SITL, and Gazebo installation details, validate the target environment before using simulator-specific commands. Start here:
+First run on a simulator host:
+
+```bash
+git clone https://github.com/XDEI-Group/AerialClaw.git
+cd AerialClaw
+./scripts/sim_quickstart.sh --setup
+```
+
+Later runs:
+
+```bash
+./scripts/sim_quickstart.sh
+```
+
+Then open:
 
 ```text
-docs/SIMULATION_SETUP.md
+http://localhost:5001
 ```
+
+The default simulator demo uses `urban_rescue` + `x500_lidar_2d_cam`. After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
+
+Detailed simulator setup, health checks, camera troubleshooting, and LLM/VLM configuration are in [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
 
 The heavier Gazebo Compose entry is kept separate from the default mock path:
 
