@@ -7,7 +7,6 @@
  *   ├──────────────────────────────────────────────────────┤
  *   │  Tab 内容区                                           │
  *   │   控制台 → RobotPanel + SkillPanel/AiMonitor          │
- *   │   技能   → SkillEvolutionPanel                        │
  *   └──────────────────────────────────────────────────────┘
  */
 import { useState, useEffect } from 'react'
@@ -21,12 +20,10 @@ import AiMonitorPanel from './components/AiMonitorPanel'
 import AiPanel from './components/AiPanel'
 import ModelConfig from './components/ModelConfig'
 import CockpitView from './components/CockpitView'
-import SkillEvolutionPanel from './components/SkillEvolutionPanel'
 import './App.css'
 
 const TABS = [
   { key: 'console',  label: '控制台',  icon: '🖥' },
-  { key: 'skill',    label: '技能进化', icon: '🧩' },
 ]
 
 function TabBar({ activeTab, onTabChange }) {
@@ -250,14 +247,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* ── 技能进化 Tab ──────────────────────────────────────────────────────── */}
-      {activeTab === 'skill' && (
-        <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-          <SkillEvolutionPanel socket={socket} connected={connected} />
-        </div>
-      )}
-
     </div>
   )
 }
