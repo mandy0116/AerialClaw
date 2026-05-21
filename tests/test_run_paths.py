@@ -7,18 +7,20 @@ def test_readme_documents_all_runnable_user_paths():
         "docker compose up",
         "docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock",
         "docker compose -f compose.build.yml up --build",
-        "docker compose -f compose.gazebo.yml up",
         "SIM_ADAPTER=mock python server.py",
-        "bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam",
-        "bash scripts/setup_px4.sh",
-        "bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam",
-        ".\\scripts\\smoke_mock.ps1",
-        "wsl --install -d Ubuntu-24.04",
-        ".gitattributes",
+        "bash scripts/smoke_mock.sh",
+        "docs/SIMULATION_SETUP.md",
         "curl http://localhost:5001/api/status",
-        "curl http://localhost:5001/api/sensor/status",
     ]:
         assert expected in readme
+
+    for unverified in [
+        "bash scripts/setup_px4.sh",
+        "bash scripts/start_sim.sh",
+        "wsl --install -d Ubuntu-24.04",
+        "curl http://localhost:5001/api/sensor/status",
+    ]:
+        assert unverified not in readme
 
 
 def test_compose_user_path_exists_and_uses_mock_adapter():

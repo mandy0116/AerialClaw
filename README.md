@@ -176,25 +176,23 @@ The system supports **real-time Manual / AI mode switching**, allowing operators
 
 ## Installation and Deployment
 
-AerialClaw has **three runtime targets**, but the setup guide is organized by operating system first, then by target:
+This README lists only the startup paths that are routinely checked for this repository package. Platform-specific simulator integration can differ by host, driver, and simulator installation; keep those commands in the dedicated simulation documents after validating them in the target environment.
 
-| Runtime target | Purpose | Windows PowerShell | Windows WSL2 Ubuntu | macOS | Linux |
-|---|---|---:|---:|---:|---:|
-| **Container mock** | First run / demo / UI check | ✅ Recommended | ✅ | ✅ | ✅ |
-| **Local mock** | Development without a simulator | ✅ | ✅ | ✅ | ✅ |
-| **PX4 + Gazebo** | Full simulator workflow | ❌ Use WSL2 or Docker | ✅ Recommended | ✅ Advanced | ✅ Recommended |
+### Runtime modes
 
-> Windows note: do **not** run `scripts/*.sh` directly from native PowerShell for PX4/Gazebo. Those are Bash scripts for Linux/macOS/WSL2. If Bash prints `$'\r': command not found`, `set: pipefail`, or `syntax error near unexpected token $'do\r'`, your checkout converted shell scripts to CRLF. This repository pins shell scripts to LF with `.gitattributes`.
+| Runtime mode | Purpose | README status |
+|---|---|---|
+| **Container mock** | Fast demo and UI/API smoke test with a prebuilt image | Verified path |
+| **Local mock** | Source checkout development without an external simulator | Verified path |
+| **PX4 + Gazebo integration** | Full simulator integration for research experiments | Advanced integration; validate on the target simulator host before use |
 
-### 1. Container mock mode — first run on any OS
+### 1. Container mock mode — verified quick start
 
-This is the fastest repeatable demo. It does **not** require PX4, Gazebo, AirSim, a GPU, a real drone, an LLM API key, or local image building.
+This path does not require PX4, Gazebo, AirSim, a GPU, a real drone, an LLM API key, or local image building.
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
-
-# Windows users: start Docker Desktop first and wait until the Linux engine is running.
 docker compose up
 ```
 
@@ -208,11 +206,15 @@ Verify in another terminal:
 
 ```bash
 curl http://localhost:5001/api/status
-# Open http://localhost:5001
+```
+
+Then open:
+
+```text
+http://localhost:5001
 ```
 
 The default Compose file pulls a prebuilt Docker Hub mock image (`yjf0307/aerialclaw:mock`) that uses `requirements-mock.txt`, so users do not need to build from `python:3.12-slim` or `node:22-slim` locally.
-
 
 Developer-only local image build fallback:
 
@@ -220,67 +222,11 @@ Developer-only local image build fallback:
 docker compose -f compose.build.yml up --build
 ```
 
-If that fallback fails while loading metadata for `python:3.12-slim` or `node:22-slim`, use the prebuilt image path above or fix Docker Desktop's registry/proxy settings.
+### 2. Local mock mode — verified development path
 
-Optional heavier containerized Gazebo direct demo:
+Use this path when editing the source tree without connecting to an external simulator.
 
-```bash
-docker compose -f compose.gazebo.yml up
-```
-
-### 2. Local mock mode — development without Gazebo
-
-Use this when editing code locally without the simulator.
-
-#### Windows PowerShell
-
-```powershell
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
-
-py -3.10 -m venv venv
-.\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python -m pytest
-
-cd ui
-npm install
-npm run build
-cd ..
-
-$env:SIM_ADAPTER="mock"
-python server.py
-```
-
-Optional Windows smoke gate:
-
-```powershell
-.\scripts\smoke_mock.ps1
-```
-
-#### Windows CMD
-
-```bat
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
-
-py -3.10 -m venv venv
-venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python -m pytest
-
-cd ui
-npm install
-npm run build
-cd ..
-
-set SIM_ADAPTER=mock
-python server.py
-```
-
-#### macOS / Linux / WSL2 Ubuntu
+#### macOS / Linux
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
@@ -290,6 +236,7 @@ python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip install pytest
 python -m pytest
 
 cd ui
@@ -300,120 +247,43 @@ cd ..
 SIM_ADAPTER=mock python server.py
 ```
 
-Optional Unix smoke gate:
+Verify in another terminal:
+
+```bash
+curl http://localhost:5001/api/status
+```
+
+Optional repository smoke gate for Unix-like shells:
 
 ```bash
 bash scripts/smoke_mock.sh
 ```
 
-Verify:
+#### Windows local mock notes
 
-```bash
-curl http://localhost:5001/api/status
-# Open http://localhost:5001
-```
-
-### 3. PX4 + Gazebo guided simulation
-
-Use this only after container mock or local mock works. This target is heavier because PX4 SITL and Gazebo are OS-level simulator dependencies.
-
-#### Supported environment
-
-- **Recommended:** Linux or Windows WSL2 Ubuntu 22.04/24.04
-- **Advanced:** macOS with Gazebo/PX4 dependencies installed
-- **Not supported:** native Windows PowerShell running `scripts/*.sh`
-
-#### Windows: use WSL2 Ubuntu for PX4/Gazebo
-
-From Windows PowerShell, install/open WSL2 first:
+The repository includes a PowerShell smoke script for Windows users:
 
 ```powershell
-wsl --install -d Ubuntu-24.04
-wsl
+.\scripts\smoke_mock.ps1
 ```
 
-Inside the Ubuntu/WSL terminal:
+Use this path from a normal Windows Python/Node environment after installing Python 3.10+ and Node.js. If a Windows checkout changes shell-script line endings, `.gitattributes` keeps repository shell scripts configured for LF on subsequent clean checkouts.
 
-```bash
-sudo apt update
-sudo apt install -y git curl python3 python3-venv nodejs npm cmake build-essential
+### 3. Simulator integration
 
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
+PX4 + Gazebo integration is maintained as an advanced simulator path. Because it depends on host OS packages, graphics/driver state, PX4 SITL, and Gazebo installation details, do not treat it as a generic one-command README quick start.
 
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
-bash scripts/setup_px4.sh
-bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
-```
-
-In another WSL terminal, start AerialClaw against PX4/Gazebo:
-
-```bash
-cd AerialClaw
-source venv/bin/activate  # if using a virtual environment
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
-```
-
-#### Linux / macOS
-
-```bash
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
-bash scripts/setup_px4.sh
-bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
-```
-
-In another terminal:
-
-```bash
-source venv/bin/activate  # if using a virtual environment
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
-```
-
-Verify:
-
-```bash
-curl http://localhost:5001/api/status
-curl http://localhost:5001/api/sensor/status
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
-# Open http://localhost:5001
-```
-
-If the bundled sensor model cannot be resolved on your machine, use the PX4 standard fallback:
-
-```bash
-bash scripts/start_sim.sh default x500
-SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py
-```
-
-Common logs printed by the launcher:
+Use the simulator documentation only after validating the target environment:
 
 ```text
-/tmp/aerialclaw_dds.log
-/tmp/aerialclaw_gz.log
-/tmp/aerialclaw_px4.log
+docs/SIMULATION_SETUP.md
 ```
 
-For manual simulator debugging, see [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
-
-#### CRLF / Bash troubleshooting on Windows
-
-If Bash prints errors such as:
-
-```text
-$'\r': command not found
-set: pipefail: invalid option name
-syntax error near unexpected token `$'do\r''
-```
-
-fix the checkout line endings and retry inside Git Bash or WSL2:
+The Compose entry for the heavier Gazebo image is kept separate from the default mock path:
 
 ```bash
-git config core.autocrlf false
-git reset --hard HEAD
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+docker compose -f compose.gazebo.yml config
 ```
-
-A fresh clone after this repository version should preserve LF endings automatically because `.gitattributes` pins shell scripts to LF.
 
 ### Optional LLM configuration
 
@@ -536,15 +406,13 @@ AerialClaw/
 - [x] Autonomous decision loop · Identity & state management · Hard/soft two-layer skill architecture
 - [x] Passive + active dual-layer perception · Experience reflection · Dynamic skill generation
 - [x] PX4 + Gazebo simulation · Web monitoring & interaction interface (15 components)
-- [x] Spinal safety architecture — command filter → sandbox → approval → flight envelope
+- [x] Layered safety control architecture — command filter → sandbox → approval → flight envelope
 - [x] Four-layer memory system — working / episodic / skill / world + vector search
 - [x] Universal device protocol — REST + WebSocket interface for device integration
 - [x] Self-evolution research modules — device analysis, code generation, and skill optimization prototypes
 - [x] Device lifecycle concepts — conversational onboarding, capability profiling, and skill binding design
 - [ ] Production SDK packages for Python / Arduino / ROS2 clients
 - [ ] Hybrid edge-cloud deployment packaging
-- [x] AirSim adapter — remote simulation connection support
-- [x] AirSim remote simulation validation — Shanghai urban scene autonomous flight verified
 
 ### Future Directions
 - [ ] Real drone porting · Sim2Real transfer

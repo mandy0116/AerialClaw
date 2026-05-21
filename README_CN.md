@@ -177,25 +177,23 @@
 
 ## 安装与部署
 
-AerialClaw 有**三种运行目标**，但教程应该先按操作系统选环境，再选运行目标：
+README 只保留当前仓库包中定期验证的启动路径。仿真器集成会受宿主机系统、驱动、PX4/Gazebo 安装状态影响；相关命令应在目标环境实测后放入专门的仿真文档，而不是写成通用快速启动。
 
-| 运行目标 | 用途 | Windows 原生 PowerShell | Windows WSL2 Ubuntu | macOS | Linux |
-|---|---|---:|---:|---:|---:|
-| **容器 mock** | 首次运行 / 演示 / UI 检查 | ✅ 推荐 | ✅ | ✅ | ✅ |
-| **本地 mock** | 不启动仿真器的开发调试 | ✅ | ✅ | ✅ | ✅ |
-| **PX4 + Gazebo** | 完整仿真流程 | ❌ 走 WSL2 或 Docker | ✅ 推荐 | ✅ 进阶 | ✅ 推荐 |
+### 运行模式
 
-> Windows 注意：不要在 PowerShell 里直接跑 `scripts/*.sh` 来启动 PX4/Gazebo。这些脚本是给 Linux/macOS/WSL2 的 Bash 脚本。如果看到 `$'\r': command not found`、`set: pipefail` 或 `syntax error near unexpected token $'do\r'`，说明 shell 脚本被 Windows checkout 转成了 CRLF。仓库已加入 `.gitattributes`，强制 `*.sh` 保持 LF。
+| 运行模式 | 用途 | README 状态 |
+|---|---|---|
+| **容器 mock** | 使用预构建镜像进行快速演示和 UI/API smoke test | 已验证路径 |
+| **本地 mock** | 不连接外部仿真器的源码开发调试 | 已验证路径 |
+| **PX4 + Gazebo 集成** | 面向研究实验的完整仿真集成 | 高级集成路径；使用前需在目标仿真主机验证 |
 
-### 1. 容器 mock 模式 —— 任意系统首次运行
+### 1. 容器 mock 模式 —— 已验证快速启动
 
-这是最快的可重复演示路径。它**不需要** PX4、Gazebo、AirSim、GPU、真实无人机、LLM API Key，也不需要在用户电脑上本地构建镜像。
+该路径不需要 PX4、Gazebo、AirSim、GPU、真实无人机、LLM API Key，也不需要在用户电脑上本地构建镜像。
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
-
-# Windows 用户：请先启动 Docker Desktop，并等待 Linux engine 运行后再执行。
 docker compose up
 ```
 
@@ -209,11 +207,15 @@ docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
 
 ```bash
 curl http://localhost:5001/api/status
-# 打开 http://localhost:5001
+```
+
+然后打开：
+
+```text
+http://localhost:5001
 ```
 
 默认 Compose 文件会拉取预构建 Docker Hub 轻量 mock 镜像（`yjf0307/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
-
 
 开发者本地构建 fallback：
 
@@ -221,67 +223,11 @@ curl http://localhost:5001/api/status
 docker compose -f compose.build.yml up --build
 ```
 
-如果 fallback 在加载 `python:3.12-slim` 或 `node:22-slim` metadata 时失败，请使用上面的预构建镜像路径，或修复 Docker Desktop 镜像源/代理设置。
+### 2. 本地 mock 模式 —— 已验证开发路径
 
-可选的容器化 Gazebo direct 重镜像演示：
+适合本地改源码、不连接外部仿真器时使用。
 
-```bash
-docker compose -f compose.gazebo.yml up
-```
-
-### 2. 本地 mock 模式 —— 不启动 Gazebo 的开发流程
-
-适合本地改代码、不启动仿真器时使用。
-
-#### Windows PowerShell
-
-```powershell
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
-
-py -3.10 -m venv venv
-.\venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python -m pytest
-
-cd ui
-npm install
-npm run build
-cd ..
-
-$env:SIM_ADAPTER="mock"
-python server.py
-```
-
-Windows 可选一键 smoke gate：
-
-```powershell
-.\scripts\smoke_mock.ps1
-```
-
-#### Windows CMD
-
-```bat
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
-
-py -3.10 -m venv venv
-venv\Scripts\activate.bat
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python -m pytest
-
-cd ui
-npm install
-npm run build
-cd ..
-
-set SIM_ADAPTER=mock
-python server.py
-```
-
-#### macOS / Linux / WSL2 Ubuntu
+#### macOS / Linux
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
@@ -291,6 +237,7 @@ python3 -m venv venv
 source venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip install pytest
 python -m pytest
 
 cd ui
@@ -301,120 +248,43 @@ cd ..
 SIM_ADAPTER=mock python server.py
 ```
 
-Unix 可选一键 smoke gate：
+另开终端验证：
+
+```bash
+curl http://localhost:5001/api/status
+```
+
+Unix-like shell 可选仓库 smoke gate：
 
 ```bash
 bash scripts/smoke_mock.sh
 ```
 
-验证：
+#### Windows 本地 mock 说明
 
-```bash
-curl http://localhost:5001/api/status
-# 打开 http://localhost:5001
-```
-
-### 3. PX4 + Gazebo 引导式仿真
-
-请先确认容器 mock 或本地 mock 已经跑通，再进入 PX4/Gazebo。这个目标更重，因为 PX4 SITL 和 Gazebo 是操作系统级仿真依赖。
-
-#### 支持环境
-
-- **推荐：** Linux 或 Windows WSL2 Ubuntu 22.04/24.04
-- **进阶：** macOS（需要自行装好 Gazebo/PX4 依赖）
-- **不支持：** Windows 原生 PowerShell 直接运行 `scripts/*.sh`
-
-#### Windows：用 WSL2 Ubuntu 跑 PX4/Gazebo
-
-先在 Windows PowerShell 中安装/进入 WSL2：
+仓库提供 Windows PowerShell smoke 脚本：
 
 ```powershell
-wsl --install -d Ubuntu-24.04
-wsl
+.\scripts\smoke_mock.ps1
 ```
 
-进入 Ubuntu/WSL 终端后：
+请在安装 Python 3.10+ 和 Node.js 的普通 Windows 环境中使用。若 Windows checkout 改变 shell 脚本换行，仓库中的 `.gitattributes` 会保证后续 clean checkout 使用适合 Bash 的 LF 配置。
 
-```bash
-sudo apt update
-sudo apt install -y git curl python3 python3-venv nodejs npm cmake build-essential
+### 3. 仿真器集成
 
-git clone https://github.com/XDEI-Group/AerialClaw.git
-cd AerialClaw
+PX4 + Gazebo 是高级仿真集成路径。它依赖宿主机系统包、图形/驱动状态、PX4 SITL 和 Gazebo 安装细节，因此不作为 README 中的通用一键快速启动。
 
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
-bash scripts/setup_px4.sh
-bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
-```
-
-另开一个 WSL 终端启动 AerialClaw 后端：
-
-```bash
-cd AerialClaw
-source venv/bin/activate  # 如果使用虚拟环境
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
-```
-
-#### Linux / macOS
-
-```bash
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
-bash scripts/setup_px4.sh
-bash scripts/start_sim.sh urban_rescue x500_lidar_2d_cam
-```
-
-另开终端：
-
-```bash
-source venv/bin/activate  # 如果使用虚拟环境
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
-```
-
-验证：
-
-```bash
-curl http://localhost:5001/api/status
-curl http://localhost:5001/api/sensor/status
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam --live
-# 打开 http://localhost:5001
-```
-
-如果本机无法解析仓库自带传感器模型，可用 PX4 标准 fallback：
-
-```bash
-bash scripts/start_sim.sh default x500
-SIM_ADAPTER=px4 PX4_GZ_WORLD=default PX4_SIM_MODEL=x500 python server.py
-```
-
-常见日志位置：
+目标环境验证后，再使用专门的仿真文档：
 
 ```text
-/tmp/aerialclaw_dds.log
-/tmp/aerialclaw_gz.log
-/tmp/aerialclaw_px4.log
+docs/SIMULATION_SETUP.md
 ```
 
-手动仿真排障见 [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md)。
-
-#### Windows CRLF / Bash 排障
-
-如果 Bash 输出：
-
-```text
-$'\r': command not found
-set: pipefail: invalid option name
-syntax error near unexpected token `$'do\r''
-```
-
-在 Git Bash 或 WSL2 中修复 checkout 换行后重试：
+较重的 Gazebo 镜像 Compose 入口与默认 mock 路径分离：
 
 ```bash
-git config core.autocrlf false
-git reset --hard HEAD
-bash scripts/doctor_gazebo.sh urban_rescue x500_lidar_2d_cam
+docker compose -f compose.gazebo.yml config
 ```
-
-本版本后的 fresh clone 会通过 `.gitattributes` 自动保持 shell 脚本 LF 换行。
 
 ### 可选 LLM 配置
 
@@ -537,15 +407,13 @@ AerialClaw/
 - [x] 自主决策循环 · 身份与状态管理 · 硬/软两层技能架构
 - [x] 被动 + 主动双层感知 · 经验积累与反思 · 动态技能生成
 - [x] PX4 + Gazebo 仿真集成 · Web 监控与交互界面（15 个组件）
-- [x] 脊髓安全架构 — 命令过滤 → 沙箱 → 审批 → 安全包线
+- [x] 分层安全控制架构 — 命令过滤 → 沙箱 → 审批 → 安全包线
 - [x] 四层记忆系统 — 工作 / 情节 / 技能 / 世界 + 向量检索
 - [x] 通用设备协议 — REST + WebSocket 设备接入接口
 - [x] 自进化研究模块 — 设备分析、代码生成与技能优化原型
 - [x] 设备生命周期概念 — 对话建档、能力画像与技能绑定设计
 - [ ] Python / Arduino / ROS2 多平台客户端生产级 SDK
 - [ ] 端云协同混合部署打包
-- [x] AirSim 适配器 — 远程仿真连接支持
-- [x] AirSim 远程仿真验证 — 上海城市场景自主飞行验证通过
 
 ### 未来方向
 - [ ] 真实无人机移植 · Sim2Real 迁移
