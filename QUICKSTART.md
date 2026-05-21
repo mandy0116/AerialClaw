@@ -37,7 +37,7 @@ cd AerialClaw
 docker compose up
 
 # Equivalent plain Docker path:
-# docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
+# docker run --rm -p 5001:5001 yjf0307/aerialclaw:mock
 
 # Open http://localhost:5001
 # Or check in another terminal: curl http://localhost:5001/api/status
