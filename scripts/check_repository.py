@@ -19,7 +19,10 @@ REQUIRED_FILES = [
     "QUICKSTART.md",
     "RUN_CHECKLIST.md",
     "Dockerfile",
+    "Dockerfile.gazebo",
     "compose.yml",
+    "compose.build.yml",
+    "compose.gazebo.yml",
     ".dockerignore",
     "requirements-mock.txt",
     ".env.example",
@@ -28,10 +31,12 @@ REQUIRED_FILES = [
     "CONTRIBUTING.md",
     "SECURITY.md",
     ".github/workflows/ci.yml",
+    ".github/workflows/docker-images.yml",
     "tests/test_mock_adapter.py",
     "tests/test_server_smoke.py",
     "scripts/smoke_mock.sh",
     "scripts/doctor_gazebo.sh",
+    "scripts/docker/start_gazebo_demo.sh",
 ]
 
 STALE_PATTERNS = [

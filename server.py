@@ -301,7 +301,7 @@ def _try_connect_adapter():
                 _start_airsim_camera_stream()
                 # 启动被动感知引擎
                 _start_passive_perception()
-            elif (sim_adapter in ("px4", "gazebo", "gz") or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1") and ok:
+            elif (sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1") and ok:
                 _start_sensor_bridge()
 
         except Exception as e:

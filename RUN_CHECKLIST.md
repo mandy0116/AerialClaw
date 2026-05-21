@@ -9,14 +9,19 @@ Use `QUICKSTART.md` first. It describes a five-minute mock mode evaluation path 
 Expected quick checks:
 
 ```bash
-# Recommended container path (Compose)
-docker compose up --build
+# Recommended prebuilt container path (Compose, no local build)
+docker compose up
 curl http://localhost:5001/api/status
 
 # Equivalent plain Docker path
-docker build -t aerialclaw:demo .
-docker run --rm -p 5001:5001 aerialclaw:demo
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 curl http://localhost:5001/api/status
+
+# Developer-only local build fallback
+docker compose -f compose.build.yml up --build
+
+# Optional heavier Gazebo direct image
+docker compose -f compose.gazebo.yml up
 
 # Local fallback path
 python -m compileall -q .
@@ -36,8 +41,12 @@ SIM_ADAPTER=mock python server.py
 - `scripts/smoke_mock.sh` runs the complete local mock demo smoke gate.
 - `scripts/doctor_gazebo.sh` checks the optional PX4/Gazebo path and prints actionable next steps without modifying the system.
 - `.github/workflows/ci.yml` runs repository checks, Python compile, pytest, Web UI lint/build, Docker image build, and a Docker `/api/status` smoke test.
-- `Dockerfile` builds a lightweight mock mode image for user evaluation using `requirements-mock.txt`.
-- `compose.yml` provides a `docker compose up --build` user path with a `/api/status` healthcheck.
+- `.github/workflows/docker-images.yml` publishes prebuilt GHCR images for mock and Gazebo paths.
+- `Dockerfile` builds a lightweight mock mode image using `requirements-mock.txt`.
+- `Dockerfile.gazebo` builds the heavier Gazebo direct demo image.
+- `compose.yml` provides a prebuilt `docker compose up` user path with a `/api/status` healthcheck.
+- `compose.build.yml` is the developer-only local build fallback.
+- `compose.gazebo.yml` starts the prebuilt Gazebo direct image.
 
 ## Scope boundaries
 
@@ -63,15 +72,17 @@ At the time of hardening, the local smoke gate is expected to report:
 
 - `python scripts/check_repository.py` — pass
 - `python -m compileall -q .` — pass
-- `python -m pytest` — 10 tests pass
+- `python -m pytest` — all tests pass
 - `cd ui && npm run lint` — pass with no warnings/errors
 - `cd ui && npm run build` — pass
-- `docker build -t aerialclaw:demo .` — pass when Docker daemon is available
-- `docker run --rm -p 5001:5001 aerialclaw:demo` + `curl /api/status` — pass
-- `docker compose config` — pass
+- `docker build -t aerialclaw:ci .` — pass when Docker daemon/network are available
+- `docker run --rm -p 5001:5001 aerialclaw:ci` + `curl /api/status` — pass
+- `docker compose config` — pass for prebuilt mock path
+- `docker compose -f compose.build.yml config` — pass for developer build fallback
+- `docker compose -f compose.gazebo.yml config` — pass for Gazebo direct image path
 
 ## Remaining known limitations
 
-- Full PX4/Gazebo repeatability is heavier than the mock repository package and should be treated as a guided integration validation path rather than the five-minute smoke repository package.
+- The prebuilt Gazebo direct image is heavier than the mock image and is intended for simulator demos; full PX4/Gazebo repeatability remains a guided integration validation path.
 - AirSim/OpenFly validation depends on external simulator assets and should not be presented as the public default quick path.
 - The test suite is now suitable for smoke evaluation, but not yet a comprehensive safety/flight-control verification suite.

@@ -178,21 +178,22 @@ The system supports **real-time Manual / AI mode switching**, allowing operators
 
 AerialClaw has three runnable paths. Start with Docker mock mode if you are a user or first-time user; then use local mock mode for development; finally use the PX4/Gazebo path when you want the full simulator.
 
-### Path 1 — Docker mock mode (recommended first run)
+### Path 1 — Prebuilt Docker mock mode (recommended first run)
 
-This path is the fastest repeatable demo. It does **not** require PX4, Gazebo, AirSim, a GPU, a real drone, or an LLM API key.
+This path is the fastest repeatable demo. It does **not** require PX4, Gazebo, AirSim, a GPU, a real drone, an LLM API key, or local image building.
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
 
-# Option A: Docker Compose
 # Windows users: start Docker Desktop first and wait until the Linux engine is running.
-docker compose up --build
+docker compose up
+```
 
-# Option B: plain Docker
-docker build -t aerialclaw:demo .
-docker run --rm -p 5001:5001 aerialclaw:demo
+Equivalent plain Docker command:
+
+```bash
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 ```
 
 Verify in another terminal:
@@ -208,9 +209,21 @@ Expected response contains fields similar to:
 {"initialized": true, "mode": "manual", "current_robot": "HOST_DEVICE"}
 ```
 
-The Docker image intentionally uses `requirements-mock.txt`, so it is a lightweight user image rather than a full PX4/Gazebo/AirSim image.
+The default Compose file pulls a prebuilt lightweight mock image (`ghcr.io/xdei-group/aerialclaw:mock`) that uses `requirements-mock.txt`, so users do not need to build from `python:3.12-slim` or `node:22-slim` locally.
 
-If Docker fails while loading metadata for `python:3.12-slim` or `node:22-slim`, for example with `TLS handshake timeout` from a registry mirror such as `registry.docker-cn.com`, fix the Docker Desktop registry/proxy settings first and then rerun `docker compose up --build`. `docker run aerialclaw:demo` only works after the image has been built successfully.
+Developers who explicitly want a local image build can use:
+
+```bash
+docker compose -f compose.build.yml up --build
+```
+
+If that developer build fails while loading metadata for `python:3.12-slim` or `node:22-slim`, for example with `TLS handshake timeout` from a registry mirror such as `registry.docker-cn.com`, fix Docker Desktop's registry/proxy settings or use the prebuilt image path above.
+
+For the heavier Gazebo direct demo image:
+
+```bash
+docker compose -f compose.gazebo.yml up
+```
 
 ### Path 2 — Local mock mode (development)
 

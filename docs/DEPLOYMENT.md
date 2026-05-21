@@ -159,16 +159,29 @@ The safety envelope should remain active in both cloud and edge deployments; do 
 
 ---
 
-## Docker 部署（mock mode）
+## Docker 部署（prebuilt images）
 
-The root `Dockerfile` is intended for lightweight mock mode deployment, not PX4/Gazebo simulation.
+The default Docker path is a prebuilt lightweight mock image. Users should not need to build `python:3.12-slim` or `node:22-slim` locally.
 
 ```bash
-docker build -t aerialclaw .
-docker run --rm -p 5001:5001 -e SIM_ADAPTER=mock aerialclaw
+docker compose up
+# or:
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 ```
 
-For PX4/Gazebo, use the native setup in `docs/SIMULATION_SETUP.md`.
+Developer-only local build fallback:
+
+```bash
+docker compose -f compose.build.yml up --build
+```
+
+The heavier Gazebo direct demo image is published separately:
+
+```bash
+docker compose -f compose.gazebo.yml up
+```
+
+For full PX4/Gazebo integration, use the native setup in `docs/SIMULATION_SETUP.md`.
 
 ---
 

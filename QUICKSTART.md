@@ -25,27 +25,37 @@ bash scripts/smoke_mock.sh
 
 This runs repository consistency checks, Python compile, pytest, Web UI lint, and Web UI build.
 
-## Quick path: Docker mock mode evaluation
+## Quick path: prebuilt Docker mock mode evaluation
 
-This is the recommended first-pass user path. It does **not** require PX4, Gazebo, AirSim, a GPU, a real drone, or an LLM API key. The image intentionally uses `requirements-mock.txt` instead of the full simulation/ML dependency set.
+This is the recommended first-pass user path. It does **not** require PX4, Gazebo, AirSim, a GPU, a real drone, an LLM API key, or local image building. The prebuilt image intentionally uses `requirements-mock.txt` instead of the full simulation/ML dependency set.
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
 
-# Option A: Docker Compose
 # Windows users: start Docker Desktop first and wait until the Linux engine is running.
-docker compose up --build
+docker compose up
 
-# Option B: plain Docker
-docker build -t aerialclaw:demo .
-docker run --rm -p 5001:5001 aerialclaw:demo
+# Equivalent plain Docker path:
+# docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 
 # Open http://localhost:5001
 # Or check in another terminal: curl http://localhost:5001/api/status
 ```
 
-If Docker reports `TLS handshake timeout` while resolving `python:3.12-slim` or `node:22-slim`, the base image was not pulled and `aerialclaw:demo` was not created. Fix Docker Desktop's registry mirror/proxy settings, then run the build command again.
+Developer-only local image build fallback:
+
+```bash
+docker compose -f compose.build.yml up --build
+```
+
+If the developer build fallback reports `TLS handshake timeout` while resolving `python:3.12-slim` or `node:22-slim`, use the prebuilt image path above or fix Docker Desktop's registry mirror/proxy settings.
+
+Optional heavier Gazebo direct image:
+
+```bash
+docker compose -f compose.gazebo.yml up
+```
 
 ## Local mock mode evaluation
 

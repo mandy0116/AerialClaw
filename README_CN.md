@@ -179,21 +179,22 @@
 
 AerialClaw 提供三条可运行路径。第一次使用或运行时建议先跑 Docker mock；本地开发走 local mock；需要完整仿真时再走 PX4/Gazebo。
 
-### 路径 1 — Docker mock 模式（推荐首次运行）
+### 路径 1 — 预构建 Docker mock 模式（推荐首次运行）
 
-这是最快的可运行演示路径。它**不需要** PX4、Gazebo、AirSim、GPU、真实无人机或 LLM API Key。
+这是最快的可运行演示路径。它**不需要** PX4、Gazebo、AirSim、GPU、真实无人机、LLM API Key，也不需要在用户电脑上本地构建镜像。
 
 ```bash
 git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
 
-# 方式 A：Docker Compose
 # Windows 用户：请先启动 Docker Desktop，并等待 Linux engine 运行后再执行。
-docker compose up --build
+docker compose up
+```
 
-# 方式 B：普通 Docker
-docker build -t aerialclaw:demo .
-docker run --rm -p 5001:5001 aerialclaw:demo
+等价的普通 Docker 命令：
+
+```bash
+docker run --rm -p 5001:5001 ghcr.io/xdei-group/aerialclaw:mock
 ```
 
 另开终端验证：
@@ -209,9 +210,21 @@ curl http://localhost:5001/api/status
 {"initialized": true, "mode": "manual", "current_robot": "HOST_DEVICE"}
 ```
 
-Docker 镜像刻意使用 `requirements-mock.txt`，定位是轻量运行镜像，不包含完整 PX4/Gazebo/AirSim 依赖。
+默认 Compose 文件会拉取预构建轻量 mock 镜像（`ghcr.io/xdei-group/aerialclaw:mock`），镜像内部使用 `requirements-mock.txt`，所以用户电脑不需要本地构建 `python:3.12-slim` 或 `node:22-slim` 基础镜像。
 
-如果 Docker 在加载 `python:3.12-slim` 或 `node:22-slim` metadata 时失败，例如 registry mirror（如 `registry.docker-cn.com`）返回 `TLS handshake timeout`，请先修复 Docker Desktop 的镜像源/代理设置，再重新执行 `docker compose up --build`。只有镜像成功 build 后，`docker run aerialclaw:demo` 才能运行本地镜像。
+开发者如果明确需要本地构建，可以执行：
+
+```bash
+docker compose -f compose.build.yml up --build
+```
+
+如果这个开发者构建路径在加载 `python:3.12-slim` 或 `node:22-slim` metadata 时失败，例如 registry mirror（如 `registry.docker-cn.com`）返回 `TLS handshake timeout`，请修复 Docker Desktop 的镜像源/代理设置，或直接使用上面的预构建镜像路径。
+
+更重的 Gazebo direct 演示镜像：
+
+```bash
+docker compose -f compose.gazebo.yml up
+```
 
 ### 路径 2 — 本地 mock 模式（开发）
 

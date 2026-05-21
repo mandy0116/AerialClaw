@@ -1,7 +1,9 @@
 services:
   aerialclaw:
-    image: ghcr.io/xdei-group/aerialclaw:mock
-    pull_policy: missing
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aerialclaw:demo
     environment:
       SIM_ADAPTER: mock
       SERVER_HOST: 0.0.0.0

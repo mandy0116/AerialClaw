@@ -62,5 +62,8 @@ jobs:
           docker logs aerialclaw-ci
           docker rm -f aerialclaw-ci || true
           exit 1
-      - name: Validate Docker Compose user path
-        run: docker compose config
+      - name: Validate prebuilt Docker Compose user paths
+        run: |
+          docker compose config
+          docker compose -f compose.build.yml config
+          docker compose -f compose.gazebo.yml config
