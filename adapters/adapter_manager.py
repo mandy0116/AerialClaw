@@ -11,6 +11,7 @@ adapter_manager.py
 """
 
 import logging
+import os
 from typing import Optional
 from adapters.sim_adapter import SimAdapter
 
@@ -100,10 +101,18 @@ def init_adapter(adapter_type: str = "px4", connection_str: str = "", timeout: f
     if ok:
         logger.info(f"✅ 适配器 {_adapter.name} 连接成功")
     else:
-        logger.warning(f"⚠️ 适配器 {_adapter.name} 连接失败，降级到 mock")
-        from adapters.mock_adapter import MockAdapter
-        _adapter = MockAdapter()
-        _adapter.connect()
+        allow_fallback = os.getenv("AERIALCLAW_ALLOW_MOCK_FALLBACK", "0") == "1"
+        if adapter_type != "mock" and not allow_fallback:
+            logger.error(
+                "❌ 适配器 %s 连接失败；保持该适配器为 disconnected，禁止静默降级到 mock。"
+                "如确实需要 mock，请显式设置 SIM_ADAPTER=mock 或 AERIALCLAW_ALLOW_MOCK_FALLBACK=1。",
+                _adapter.name,
+            )
+        else:
+            logger.warning(f"⚠️ 适配器 {_adapter.name} 连接失败，降级到 mock")
+            from adapters.mock_adapter import MockAdapter
+            _adapter = MockAdapter()
+            _adapter.connect()
 
     return ok
 

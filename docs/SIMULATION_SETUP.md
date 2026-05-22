@@ -145,6 +145,7 @@ This is AerialClaw's modified UAV model, not the plain PX4 `x500`. It publishes 
 | PX4/Gazebo setup | `scripts/setup_px4.sh` when `--setup` is used | PX4 checkout/build, Gazebo models/worlds, Micro XRCE-DDS Agent, MAVSDK Python dependency |
 | Simulator | `scripts/start_sim.sh urban_rescue x500_lidar_2d_cam` | Micro XRCE-DDS Agent, Gazebo server, PX4 SITL |
 | AerialClaw backend | `SIM_ADAPTER=px4 ... python server.py` | Web console and PX4 adapter on `http://localhost:5001` |
+| PX4 control adapter | backend auto-start after `/api/init` | `/api/adapter/status` must report `adapter=px4` and `connected=true`; otherwise motor commands are not controlling PX4 |
 | Sensor bridge | backend auto-start after adapter connection | camera/LiDAR frames emitted to the Web UI; `/api/sensor/camera` returns JPEG |
 | LLM provider | `.env` or Web UI Model Configuration | AI mode can plan and execute natural-language flight tasks |
 
@@ -208,6 +209,7 @@ curl http://localhost:5001/api/sensor/status
 Healthy signs:
 
 - `/api/status` returns `initialized` / `current_robot` fields after initialization.
+- `/api/adapter/status` returns `adapter: px4` and `connected: true`. If it says `mock` or `connected: false`, the cameras may still work, but motor commands are not controlling PX4.
 - `/api/sensor/status` returns `"running": true`, `world: urban_rescue`, and `model: x500_lidar_2d_cam_0`.
 - `/api/sensor/status` lists five cameras (`front/rear/left/right/down`) plus LiDAR with increasing `frame_count`.
 - `/api/sensor/camera` returns `Content-Type: image/jpeg` and a non-empty JPEG file.
@@ -373,6 +375,28 @@ find PX4-Autopilot/build -type f -name '*.ulg' -delete
 ```
 
 Console logs are also bounded by `AERIALCLAW_LOG_LIMIT_BYTES` (default 50 MiB per process) to avoid `/tmp` growth from noisy PX4/Gazebo output.
+
+### Web UI looks connected, but the drone does not move
+
+Check the flight-control adapter, not just the camera bridge:
+
+```bash
+curl http://localhost:5001/api/adapter/status
+```
+
+Expected:
+
+```json
+{"adapter":"px4","connected":true}
+```
+
+If the adapter is `mock` or disconnected, restart through quickstart:
+
+```bash
+./scripts/sim_quickstart.sh --restart
+```
+
+`sim_quickstart.sh` waits for the MAVSDK control link before starting the backend and fails the run if the PX4 adapter does not connect. This prevents the dangerous mixed state where Gazebo camera frames are live but motor skills silently execute against mock control.
 
 ### MAVSDK connection fails
 - Start `mavsdk_server` separately, don't rely on auto-start

@@ -1124,6 +1124,41 @@ def api_status():
     return jsonify(_get_system_status())
 
 
+@app.route("/api/adapter/status", methods=["GET"])
+def api_adapter_status():
+    """Return the active control adapter status.
+
+    This endpoint is intentionally separate from Gazebo sensor status: camera/LiDAR
+    frames can be healthy while the flight-control adapter is disconnected. The UI
+    and quickstart use this to avoid mistaking mock control for real PX4 control.
+    """
+    try:
+        from adapters.adapter_manager import get_adapter
+        adapter = get_adapter()
+        if adapter is None:
+            return jsonify({"ok": False, "adapter": None, "connected": False, "error": "adapter not initialized"})
+        payload = {
+            "ok": bool(adapter.is_connected()),
+            "adapter": getattr(adapter, "name", adapter.__class__.__name__),
+            "description": getattr(adapter, "description", ""),
+            "connected": bool(adapter.is_connected()),
+        }
+        try:
+            st = adapter.get_state()
+            payload["state"] = {
+                "armed": bool(st.armed),
+                "in_air": bool(st.in_air),
+                "mode": st.mode,
+                "position_ned": [st.position_ned.north, st.position_ned.east, st.position_ned.down] if st.position_ned else None,
+                "battery_percent": st.battery_percent,
+            }
+        except Exception as e:
+            payload["state_error"] = str(e)
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"ok": False, "connected": False, "error": str(e)}), 500
+
+
 @app.route("/api/world", methods=["GET"])
 def api_world():
     return jsonify(state.get_world_snapshot())

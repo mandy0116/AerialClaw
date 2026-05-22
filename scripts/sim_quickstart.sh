@@ -146,6 +146,61 @@ wait_http() {
   return 1
 }
 
+wait_mavsdk_control() {
+  local max_wait="${1:-90}"
+  info "Waiting for PX4 MAVSDK control link (udp://:14540)"
+  for i in $(seq 1 "$max_wait"); do
+    if "$PYTHON" - <<'PYMAV' >/tmp/aerialclaw_quickstart_mavsdk.log 2>&1
+import asyncio, time
+from mavsdk import System
+async def main():
+    drone = System()
+    await drone.connect(system_address="udp://:14540")
+    deadline = time.time() + 4
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            return 0
+        if time.time() > deadline:
+            return 1
+    return 1
+raise SystemExit(asyncio.run(main()))
+PYMAV
+    then
+      ok "PX4 MAVSDK control link is ready"
+      return 0
+    fi
+    sleep 1
+  done
+  err "PX4 MAVSDK control link did not become ready. Last MAVSDK probe log:"
+  tail -80 /tmp/aerialclaw_quickstart_mavsdk.log 2>/dev/null || true
+  return 1
+}
+
+wait_control_adapter() {
+  local max_wait="${1:-90}"
+  info "Checking PX4 control adapter (must not be mock)"
+  for i in $(seq 1 "$max_wait"); do
+    if curl -fsS "$BASE_URL/api/adapter/status" >/tmp/aerialclaw_quickstart_adapter.json 2>/dev/null; then
+      if "$PYTHON" - <<'PYADAPTER'
+import json
+from pathlib import Path
+data = json.loads(Path('/tmp/aerialclaw_quickstart_adapter.json').read_text())
+raise SystemExit(0 if data.get('adapter') == 'px4' and data.get('connected') else 1)
+PYADAPTER
+      then
+        ok "PX4 control adapter connected"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  err "PX4 control adapter is not connected. Current adapter status:"
+  cat /tmp/aerialclaw_quickstart_adapter.json 2>/dev/null || true
+  echo ""
+  tail -160 "$SERVER_LOG" 2>/dev/null || true
+  return 1
+}
+
 ensure_python_env() {
   local base_python
   base_python="$(find_supported_python || true)"
@@ -319,6 +374,10 @@ if ! is_pid_alive "$(cat "$SIM_PID_FILE" 2>/dev/null || true)"; then
   tail -120 "$SIM_LOG" 2>/dev/null || true
   exit 1
 fi
+wait_mavsdk_control 90 || {
+  tail -160 "$SIM_LOG" 2>/dev/null || true
+  exit 1
+}
 
 if [ -f "$SERVER_PID_FILE" ] && is_pid_alive "$(cat "$SERVER_PID_FILE")"; then
   warn "AerialClaw backend already running (PID $(cat "$SERVER_PID_FILE")). Use --restart to restart it."
@@ -342,6 +401,7 @@ if curl -fsS -X POST "$BASE_URL/api/init" >/tmp/aerialclaw_quickstart_init.json 
 else
   warn "Runtime init endpoint did not return success yet. You can still click Initialize System in the UI."
 fi
+wait_control_adapter 90 || exit 1
 
 if [ "$START_GAZEBO_GUI" = "1" ]; then
   if [ -f "$GUI_PID_FILE" ] && is_pid_alive "$(cat "$GUI_PID_FILE")"; then
@@ -410,6 +470,7 @@ printf "\n============================================================\n"
 printf "%bFull simulator stack is running.%b\n" "$GREEN" "$NC"
 printf "\n"
 printf "Open Web UI:\n  %s\n\n" "$BASE_URL"
+printf "Control check:\n  curl %s/api/adapter/status  # must show adapter=px4 and connected=true\n\n" "$BASE_URL"
 printf "Camera check:\n  Open Cockpit / camera panels. If they show NO SIGNAL, run:\n"
 printf "  ./scripts/doctor_gazebo.sh %s %s --live\n\n" "$WORLD" "$MODEL"
 printf "LLM setup for autonomous flight:\n"

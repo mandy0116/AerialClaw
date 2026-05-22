@@ -301,12 +301,15 @@ After quickstart prints `Full simulator stack is running`, open:
 http://127.0.0.1:5001
 ```
 
-You can also verify the Web service directly:
+You can also verify the Web service and flight-control adapter directly:
 
 ```bash
 curl http://127.0.0.1:5001/api/status
+curl http://127.0.0.1:5001/api/adapter/status   # must show adapter=px4 and connected=true
 curl http://127.0.0.1:5001/api/sensor/status
 ```
+
+Do not treat the simulator as healthy if cameras work but `/api/adapter/status` says `adapter=mock` or `connected=false`; that means the Web UI is seeing Gazebo frames but motor commands will not control PX4.
 
 Clean restart if an old simulator/backend is still alive:
 
@@ -320,6 +323,7 @@ A full simulator setup is considered healthy only when these checks pass:
 
 ```bash
 curl http://localhost:5001/api/status
+curl http://localhost:5001/api/adapter/status   # adapter=px4, connected=true
 curl http://localhost:5001/api/sensor/status
 curl -fsS http://localhost:5001/api/sensor/camera -o /tmp/aerialclaw_camera.jpg
 file /tmp/aerialclaw_camera.jpg  # should report JPEG image data, 640x480
