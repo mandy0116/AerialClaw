@@ -29,6 +29,7 @@
 
 ## 📢 更新日志
 
+- **(2026/5/22)** 部署与仿真启动链路升级 — 新增更清晰的分阶段启动流程：Docker 镜像拉取式快速体验、Phase 1 Mock Runtime、Phase 2 PX4+Gazebo 完整仿真、Phase 3 LLM 自主控制链路。新的 `sim_quickstart.sh` 支持一键编排 PX4 SITL、Gazebo、AerialClaw backend、Web UI、Gazebo GUI、MAVSDK 控制链路与 camera/LiDAR sensor bridge，并加入 `/api/adapter/status`、`/api/sensor/status`、`/api/sensor/camera` 确定性健康检查。该版本同时禁止 PX4 控制失败后静默降级到 mock，固定仿真关键 Python 依赖，并默认关闭/清理 PX4 ULog 持久日志，保证本地演示环境可复现、可诊断且不会异常占满磁盘。
 - **(2026/5/12)** PX4+Gazebo Web 控制台维护更新 — 修复 Gazebo 摄像头 / LiDAR 到 Web UI 的数据流，新增本地仿真演示用 Gazebo direct adapter，修复驾驶舱速度控制与遥测同步问题，避免 LLM 解析失败被伪装成任务成功，在 LLM 通道不可用时为简单指令提供确定性兜底计划，并让运行时模型渠道 / 模型配置持久化，同时对 URL、模型名、鉴权等错误返回安全可读提示。
 - **(2026/3/24)** AerialClaw v2.0 更新 — 安全包线、四层记忆、通用设备协议、自进化引擎、AirSim 上海城市场景集成、自主城市巡检演示、GPT-4o 视觉感知、实时地图更新、Doctor Agent 适配器、WASD 手动控制、平滑插值飞行。
 - **(2026/3/14)** AerialClaw v1.0 发布 — 完整 Agent 决策循环、12 项硬技能、反思引擎、Web 控制台、PX4+Gazebo 仿真集成。
