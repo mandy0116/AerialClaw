@@ -310,6 +310,8 @@ file /tmp/aerialclaw_camera.jpg  # should report JPEG image data, 640x480
 
 Expected sensor status includes `"running": true`, `world: urban_rescue`, `model: x500_lidar_2d_cam_0`, five camera streams, and LiDAR with increasing `frame_count`. If the Web UI camera panels show `NO SIGNAL`, do not fall back to the plain `x500`; fix the bridge using [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
 
+Disk-safety default: PX4 `.ulg` flight logs are disabled/cleaned by `scripts/start_sim.sh` so repeated demos do not fill user storage. If you intentionally need PX4 ULog files for flight-controller debugging, run with `AERIALCLAW_KEEP_PX4_LOGS=1`.
+
 After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
 
 Detailed simulator setup, health checks, camera troubleshooting, and LLM/VLM configuration are in [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).

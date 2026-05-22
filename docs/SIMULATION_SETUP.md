@@ -211,6 +211,7 @@ Healthy signs:
 - `/api/sensor/camera` returns `Content-Type: image/jpeg` and a non-empty JPEG file.
 - `doctor_gazebo.sh --live` lists Gazebo camera/LiDAR topics.
 - The Web UI cockpit/camera panels show frames instead of `NO SIGNAL`.
+- Repeated runs do not accumulate PX4 `.ulg` files under `PX4-Autopilot/build/px4_sitl_default/log` unless `AERIALCLAW_KEEP_PX4_LOGS=1` is explicitly set.
 
 ### Control-debug fallback only
 
@@ -346,6 +347,30 @@ If status says the bridge is unavailable:
 - verify `PX4_SIM_MODEL=x500_lidar_2d_cam` matches the spawned model base name; PX4/Gazebo commonly appends `_0` to the spawned model
 - if `/api/sensor/camera` returns 500 with `ModuleNotFoundError: cv2`, install the pinned dependency from `requirements.txt` (`opencv-python-headless==4.10.0.84`, keeping `numpy<2` for PX4/symforce compatibility)
 - if you renamed links/sensors, update `sim/gz_sensor_bridge.py` topic templates
+
+### PX4 ULog / disk usage safety
+
+PX4 normally writes persistent `.ulg` flight logs under the SITL build tree, for example:
+
+```text
+PX4-Autopilot/build/px4_sitl_default/log/YYYY-MM-DD/*.ulg
+```
+
+Those files can grow by tens or hundreds of MB per run. For user-facing demos, `scripts/start_sim.sh` disables PX4 ULog persistence and removes stale `.ulg` files by default. This prevents repeated simulator sessions from filling the user's disk.
+
+If you intentionally need PX4 ULog files for flight-controller debugging:
+
+```bash
+AERIALCLAW_KEEP_PX4_LOGS=1 ./scripts/sim_quickstart.sh --restart
+```
+
+Manual cleanup command:
+
+```bash
+find PX4-Autopilot/build -type f -name '*.ulg' -delete
+```
+
+Console logs are also bounded by `AERIALCLAW_LOG_LIMIT_BYTES` (default 50 MiB per process) to avoid `/tmp` growth from noisy PX4/Gazebo output.
 
 ### MAVSDK connection fails
 - Start `mavsdk_server` separately, don't rely on auto-start

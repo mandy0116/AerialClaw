@@ -29,6 +29,54 @@ for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
         f.write(keep); f.flush(); n += len(keep)
 ' "$log_file" "$AERIALCLAW_LOG_LIMIT_BYTES"
 }
+
+AERIALCLAW_KEEP_PX4_LOGS="${AERIALCLAW_KEEP_PX4_LOGS:-0}"
+cleanup_px4_ulog_files() {
+    # PX4 writes persistent .ulg flight logs into the build/rootfs tree by
+    # default. For demos this can grow by hundreds of MB per run and fill a
+    # user's disk. Keep them only when explicitly requested.
+    if [ "$AERIALCLAW_KEEP_PX4_LOGS" = "1" ]; then
+        return
+    fi
+    if [ -n "${PX4_BUILD:-}" ] && [ -d "$PX4_BUILD" ]; then
+        find "$PX4_BUILD" -type f -name '*.ulg' -delete 2>/dev/null || true
+    fi
+}
+
+configure_px4_logging_policy() {
+    local rc_logging="${PX4_BUILD}/etc/init.d/rc.logging"
+    local backup="${rc_logging}.aerialclaw.bak"
+    [ -f "$rc_logging" ] || return
+
+    if [ "$AERIALCLAW_KEEP_PX4_LOGS" = "1" ]; then
+        if [ -f "$backup" ]; then
+            cp "$backup" "$rc_logging"
+        fi
+        echo "PX4 ULog persistence: enabled (AERIALCLAW_KEEP_PX4_LOGS=1)"
+        return
+    fi
+
+    if [ ! -f "$backup" ]; then
+        cp "$rc_logging" "$backup"
+    fi
+    if ! grep -q "AerialClaw demo disables persistent PX4 ULog" "$rc_logging"; then
+        python3 - "$rc_logging" <<'PYPX4LOG'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+text = p.read_text()
+insert = """\n# AerialClaw demo disables persistent PX4 ULog by default.\n# start_sim.sh restores the original file when AERIALCLAW_KEEP_PX4_LOGS=1.\nset LOGGER_ARGS \"\"\nexit 0\n\n"""
+if "AerialClaw demo disables persistent PX4 ULog" not in text:
+    lines = text.splitlines(True)
+    if lines and lines[0].startswith("#!"):
+        text = lines[0] + insert + "".join(lines[1:])
+    else:
+        text = insert + text
+    p.write_text(text)
+PYPX4LOG
+    fi
+    echo "PX4 ULog persistence: disabled for demo (set AERIALCLAW_KEEP_PX4_LOGS=1 to keep .ulg files)"
+}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -121,6 +169,7 @@ cleanup() {
     pkill -f "gz sim" 2>/dev/null || true
     pkill -f MicroXRCEAgent 2>/dev/null || true
     sleep 1
+    cleanup_px4_ulog_files
     echo "Done."
 }
 trap cleanup EXIT INT TERM
@@ -141,6 +190,9 @@ if [ -x "${SCRIPT_DIR}/doctor_gazebo.sh" ]; then
     fi
     echo ""
 fi
+
+cleanup_px4_ulog_files
+configure_px4_logging_policy
 
 echo "[1/3] Starting Micro XRCE-DDS Agent..."
 MicroXRCEAgent udp4 -p 8888 2>&1 | bounded_log "$LOG_DIR/aerialclaw_dds.log" &
@@ -203,6 +255,11 @@ echo " Logs:"
 echo "   DDS:     $LOG_DIR/aerialclaw_dds.log"
 echo "   Gazebo:  $LOG_DIR/aerialclaw_gz.log"
 echo "   PX4:     $LOG_DIR/aerialclaw_px4.log"
+if [ "$AERIALCLAW_KEEP_PX4_LOGS" = "1" ]; then
+    echo "   PX4 ULog: enabled under $PX4_BUILD/log"
+else
+    echo "   PX4 ULog: disabled/cleaned for demo safety (set AERIALCLAW_KEEP_PX4_LOGS=1 to keep .ulg)"
+fi
 echo ""
 echo " Press Ctrl+C to stop all."
 echo "============================================================"
