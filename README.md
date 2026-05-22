@@ -285,13 +285,32 @@ Later runs:
 ./scripts/sim_quickstart.sh
 ```
 
+Clean restart if an old simulator/backend is still alive:
+
+```bash
+./scripts/sim_quickstart.sh --restart
+```
+
 Then open:
 
 ```text
 http://localhost:5001
 ```
 
-The default simulator demo uses `urban_rescue` + AerialClaw's modified UAV model `x500_lidar_2d_cam` (front/rear/left/right/down cameras + 2D LiDAR). This model is required for the full showcase. After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
+The default simulator demo uses `urban_rescue` + AerialClaw's modified UAV model `x500_lidar_2d_cam` (front/rear/left/right/down cameras + 2D LiDAR). This model is required for the full showcase. `sim_quickstart.sh` starts PX4/Gazebo, opens Gazebo GUI by default, starts the Web backend with the correct Gazebo Python `PYTHONPATH`, and checks both the sensor bridge and `/api/sensor/camera` JPEG endpoint.
+
+A full simulator setup is considered healthy only when these checks pass:
+
+```bash
+curl http://localhost:5001/api/status
+curl http://localhost:5001/api/sensor/status
+curl -fsS http://localhost:5001/api/sensor/camera -o /tmp/aerialclaw_camera.jpg
+file /tmp/aerialclaw_camera.jpg  # should report JPEG image data, 640x480
+```
+
+Expected sensor status includes `"running": true`, `world: urban_rescue`, `model: x500_lidar_2d_cam_0`, five camera streams, and LiDAR with increasing `frame_count`. If the Web UI camera panels show `NO SIGNAL`, do not fall back to the plain `x500`; fix the bridge using [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
+
+After the UI opens, initialize the system, check the cockpit/camera panels, configure an LLM provider, switch to AI mode, and try a natural-language flight command.
 
 Detailed simulator setup, health checks, camera troubleshooting, and LLM/VLM configuration are in [docs/SIMULATION_SETUP.md](docs/SIMULATION_SETUP.md).
 

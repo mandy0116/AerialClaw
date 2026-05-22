@@ -44,11 +44,14 @@ HOST="${SERVER_HOST:-127.0.0.1}"
 PORT="${SERVER_PORT:-5001}"
 BASE_URL="http://${HOST}:${PORT}"
 GZ_PYTHONPATH="${GZ_PYTHONPATH:-}"
+START_GAZEBO_GUI="${START_GAZEBO_GUI:-1}"
 
 SIM_PID_FILE="/tmp/aerialclaw_full_sim.pid"
 SERVER_PID_FILE="/tmp/aerialclaw_full_server.pid"
+GUI_PID_FILE="/tmp/aerialclaw_gz_gui.pid"
 SIM_LOG="/tmp/aerialclaw_full_sim_launcher.log"
 SERVER_LOG="/tmp/aerialclaw_full_server.log"
+GUI_LOG="/tmp/aerialclaw_gz_gui.log"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; BLUE=$'\033[0;34m'; RED=$'\033[0;31m'; NC=$'\033[0m'
@@ -103,11 +106,24 @@ stop_from_pid_file() {
     pid="$(cat "$file" 2>/dev/null || true)"
     if is_pid_alive "$pid"; then
       info "Stopping previous ${label} process (PID ${pid})"
+      local pgid current_pgid
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+      current_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ' || true)"
       kill "$pid" >/dev/null 2>&1 || true
+      # Processes started by start_sim.sh often share a process group. Kill that
+      # group only when it is not the current quickstart shell's group; otherwise
+      # `--restart` can kill itself in terminal/agent wrappers. Killing start_sim
+      # directly is normally enough because its EXIT trap cleans DDS/Gazebo/PX4.
+      if [ -n "$pgid" ] && [ "$pgid" != "$current_pgid" ]; then
+        kill -TERM "-$pgid" >/dev/null 2>&1 || true
+      fi
       sleep 2
       if is_pid_alive "$pid"; then
-        warn "${label} did not stop gracefully; sending SIGTERM again"
-        kill -TERM "$pid" >/dev/null 2>&1 || true
+        warn "${label} did not stop gracefully; sending SIGKILL"
+        kill -KILL "$pid" >/dev/null 2>&1 || true
+        if [ -n "$pgid" ] && [ "$pgid" != "$current_pgid" ]; then
+          kill -KILL "-$pgid" >/dev/null 2>&1 || true
+        fi
         sleep 1
       fi
     fi
@@ -194,7 +210,7 @@ ensure_gazebo_python_path() {
     return
   fi
 
-  local pyver transport_site msgs_site msgs_legacy_site combo
+  local pyver transport_site msgs_site math_site msgs_legacy_site combo
   pyver="$($PYTHON - <<'PYVER'
 import sys
 print(f"{sys.version_info.major}.{sys.version_info.minor}")
@@ -205,21 +221,25 @@ PYVER
   # because that can shadow the venv with unrelated Homebrew packages.
   local transport_candidates=("/opt/homebrew/Cellar/gz-transport13"/*"/lib/python${pyver}/site-packages")
   local msgs_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python${pyver}/site-packages")
+  local math_candidates=("/opt/homebrew/Cellar/gz-math7"/*"/lib/python${pyver}/site-packages")
   local msgs_legacy_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python")
 
   for transport_site in "${transport_candidates[@]}"; do
     [ -d "$transport_site/gz" ] || continue
     for msgs_site in "${msgs_candidates[@]}"; do
       [ -d "$msgs_site/gz" ] || continue
-      for msgs_legacy_site in "${msgs_legacy_candidates[@]}"; do
-        [ -d "$msgs_legacy_site/gz" ] || msgs_legacy_site=""
-        combo="$transport_site:$msgs_site${msgs_legacy_site:+:$msgs_legacy_site}"
-        if PYTHONPATH="$combo:${PYTHONPATH:-}" "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
-          GZ_PYTHONPATH="$combo${GZ_PYTHONPATH:+:$GZ_PYTHONPATH}"
-          export PYTHONPATH="$combo:${PYTHONPATH:-}"
-          ok "Gazebo Python bindings found: $combo"
-          return
-        fi
+      for math_site in "${math_candidates[@]}"; do
+        [ -d "$math_site/gz" ] || math_site=""
+        for msgs_legacy_site in "${msgs_legacy_candidates[@]}"; do
+          [ -d "$msgs_legacy_site/gz" ] || msgs_legacy_site=""
+          combo="$transport_site:$msgs_site${math_site:+:$math_site}${msgs_legacy_site:+:$msgs_legacy_site}"
+          if PYTHONPATH="$combo:${PYTHONPATH:-}" "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
+            GZ_PYTHONPATH="$combo${GZ_PYTHONPATH:+:$GZ_PYTHONPATH}"
+            export PYTHONPATH="$combo:${PYTHONPATH:-}"
+            ok "Gazebo Python bindings found: $combo"
+            return
+          fi
+        done
       done
     done
   done
@@ -253,6 +273,7 @@ cd "$PROJECT_DIR"
 
 if [ "$RESTART" = "1" ]; then
   stop_from_pid_file "$SERVER_PID_FILE" "AerialClaw backend"
+  stop_from_pid_file "$GUI_PID_FILE" "Gazebo GUI"
   stop_from_pid_file "$SIM_PID_FILE" "simulation launcher"
 fi
 
@@ -322,6 +343,19 @@ else
   warn "Runtime init endpoint did not return success yet. You can still click Initialize System in the UI."
 fi
 
+if [ "$START_GAZEBO_GUI" = "1" ]; then
+  if [ -f "$GUI_PID_FILE" ] && is_pid_alive "$(cat "$GUI_PID_FILE")"; then
+    ok "Gazebo GUI already running (PID $(cat "$GUI_PID_FILE"))"
+  elif command -v gz >/dev/null 2>&1; then
+    info "Starting Gazebo GUI (set START_GAZEBO_GUI=0 for headless)"
+    gz sim -g >"$GUI_LOG" 2>&1 &
+    echo $! > "$GUI_PID_FILE"
+    ok "Gazebo GUI started (PID $(cat "$GUI_PID_FILE"), log: $GUI_LOG)"
+  else
+    warn "gz CLI not found; skipping Gazebo GUI"
+  fi
+fi
+
 info "Checking sensor bridge"
 SENSOR_READY=0
 for i in $(seq 1 45); do
@@ -353,6 +387,25 @@ else
   warn "Run live diagnostics: ./scripts/doctor_gazebo.sh ${WORLD} ${MODEL} --live"
 fi
 
+info "Checking camera JPEG endpoint"
+CAMERA_READY=0
+if curl -fsS "$BASE_URL/api/sensor/camera" -o /tmp/aerialclaw_quickstart_camera.jpg 2>/dev/null; then
+  if "$PYTHON" - <<'PYCAMERA'
+from pathlib import Path
+p = Path('/tmp/aerialclaw_quickstart_camera.jpg')
+data = p.read_bytes() if p.exists() else b''
+raise SystemExit(0 if data.startswith(b'\xff\xd8') and len(data) > 1000 else 1)
+PYCAMERA
+  then
+    CAMERA_READY=1
+  fi
+fi
+if [ "$CAMERA_READY" = "1" ]; then
+  ok "Camera endpoint returns JPEG: /tmp/aerialclaw_quickstart_camera.jpg"
+else
+  warn "Camera endpoint is not returning JPEG yet. Check $SERVER_LOG and ensure Gazebo Python bindings are on PYTHONPATH."
+fi
+
 printf "\n============================================================\n"
 printf "%bFull simulator stack is running.%b\n" "$GREEN" "$NC"
 printf "\n"
@@ -369,7 +422,10 @@ printf "  Initialize System → AI mode → 'Take off to 15 meters and observe t
 printf "Logs:\n"
 printf "  Simulator launcher: %s\n" "$SIM_LOG"
 printf "  Backend:            %s\n" "$SERVER_LOG"
-printf "  DDS/Gazebo/PX4:     /tmp/aerialclaw_dds.log /tmp/aerialclaw_gz.log /tmp/aerialclaw_px4.log\n\n"
-printf "Stop this stack:\n"
-printf "  kill \$(cat %s) \$(cat %s) 2>/dev/null || true\n" "$SERVER_PID_FILE" "$SIM_PID_FILE"
+printf "  DDS/Gazebo/PX4:     /tmp/aerialclaw_dds.log /tmp/aerialclaw_gz.log /tmp/aerialclaw_px4.log\n"
+printf "  Gazebo GUI:         %s\n" "$GUI_LOG"
+printf "  Camera snapshot:    /tmp/aerialclaw_quickstart_camera.jpg\n\n"
+printf "Stop/restart this stack:\n"
+printf "  ./scripts/sim_quickstart.sh --restart\n"
+printf "  kill \$(cat %s) \$(cat %s) \$(cat %s) 2>/dev/null || true\n" "$SERVER_PID_FILE" "$GUI_PID_FILE" "$SIM_PID_FILE"
 printf "============================================================\n"

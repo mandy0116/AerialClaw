@@ -15,6 +15,20 @@
 # ============================================================
 
 set -euo pipefail
+
+# Keep simulation logs bounded. PX4 can emit MB/s when a simulation is misconfigured;
+# writing directly to /tmp/*.log without a cap can fill the whole disk.
+LOG_DIR="${AERIALCLAW_LOG_DIR:-/tmp}"
+AERIALCLAW_LOG_LIMIT_BYTES="${AERIALCLAW_LOG_LIMIT_BYTES:-52428800}"  # 50 MiB per process
+bounded_log() {
+    local log_file="$1"
+    python3 -u -c 'import sys, pathlib; p=pathlib.Path(sys.argv[1]); limit=int(sys.argv[2]); p.parent.mkdir(parents=True, exist_ok=True); f=p.open("wb"); n=0
+for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
+    if n < limit:
+        keep = chunk[:max(0, limit-n)]
+        f.write(keep); f.flush(); n += len(keep)
+' "$log_file" "$AERIALCLAW_LOG_LIMIT_BYTES"
+}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -129,40 +143,40 @@ if [ -x "${SCRIPT_DIR}/doctor_gazebo.sh" ]; then
 fi
 
 echo "[1/3] Starting Micro XRCE-DDS Agent..."
-MicroXRCEAgent udp4 -p 8888 > /tmp/aerialclaw_dds.log 2>&1 &
+MicroXRCEAgent udp4 -p 8888 2>&1 | bounded_log "$LOG_DIR/aerialclaw_dds.log" &
 DDS_PID=$!
 sleep 1
 if kill -0 "$DDS_PID" 2>/dev/null; then
     echo "  DDS Agent running (PID: $DDS_PID)"
 else
-    echo "ERROR: DDS Agent failed to start. Log: /tmp/aerialclaw_dds.log"
-    tail -80 /tmp/aerialclaw_dds.log 2>/dev/null || true
+    echo "ERROR: DDS Agent failed to start. Log: $LOG_DIR/aerialclaw_dds.log"
+    tail -80 "$LOG_DIR/aerialclaw_dds.log" 2>/dev/null || true
     exit 1
 fi
 
 echo "[2/3] Starting Gazebo ($WORLD)..."
-gz sim --verbose=1 -r -s "$WORLD_SDF" > /tmp/aerialclaw_gz.log 2>&1 &
+gz sim --verbose=1 -r -s "$WORLD_SDF" 2>&1 | bounded_log "$LOG_DIR/aerialclaw_gz.log" &
 GZ_PID=$!
 echo "  Waiting for Gazebo to load (10s)..."
 sleep 10
 if kill -0 "$GZ_PID" 2>/dev/null; then
     echo "  Gazebo running (PID: $GZ_PID)"
 else
-    echo "ERROR: Gazebo failed to start. Log: /tmp/aerialclaw_gz.log"
-    tail -120 /tmp/aerialclaw_gz.log 2>/dev/null || true
+    echo "ERROR: Gazebo failed to start. Log: $LOG_DIR/aerialclaw_gz.log"
+    tail -120 "$LOG_DIR/aerialclaw_gz.log" 2>/dev/null || true
     exit 1
 fi
 
 echo "[3/3] Starting PX4 SITL..."
 cd "$PX4_BUILD"
-"$PX4_BIN" "$PX4_BUILD" -s "${PX4_BUILD}/etc/init.d-posix/rcS" > /tmp/aerialclaw_px4.log 2>&1 < /dev/null &
+"$PX4_BIN" "$PX4_BUILD" -s "${PX4_BUILD}/etc/init.d-posix/rcS" < /dev/null 2>&1 | bounded_log "$LOG_DIR/aerialclaw_px4.log" &
 PX4_PID=$!
 sleep 8
 if kill -0 "$PX4_PID" 2>/dev/null; then
     echo "  PX4 SITL running (PID: $PX4_PID)"
 else
-    echo "ERROR: PX4 SITL failed to start. Log: /tmp/aerialclaw_px4.log"
-    tail -120 /tmp/aerialclaw_px4.log 2>/dev/null || true
+    echo "ERROR: PX4 SITL failed to start. Log: $LOG_DIR/aerialclaw_px4.log"
+    tail -120 "$LOG_DIR/aerialclaw_px4.log" 2>/dev/null || true
     exit 1
 fi
 
@@ -186,9 +200,9 @@ echo " Gazebo GUI (optional):"
 echo "   gz sim -g"
 echo ""
 echo " Logs:"
-echo "   DDS:     /tmp/aerialclaw_dds.log"
-echo "   Gazebo:  /tmp/aerialclaw_gz.log"
-echo "   PX4:     /tmp/aerialclaw_px4.log"
+echo "   DDS:     $LOG_DIR/aerialclaw_dds.log"
+echo "   Gazebo:  $LOG_DIR/aerialclaw_gz.log"
+echo "   PX4:     $LOG_DIR/aerialclaw_px4.log"
 echo ""
 echo " Press Ctrl+C to stop all."
 echo "============================================================"

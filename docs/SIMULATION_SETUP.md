@@ -143,7 +143,7 @@ This is AerialClaw's modified UAV model, not the plain PX4 `x500`. It publishes 
 | PX4/Gazebo setup | `scripts/setup_px4.sh` when `--setup` is used | PX4 checkout/build, Gazebo models/worlds, Micro XRCE-DDS Agent, MAVSDK Python dependency |
 | Simulator | `scripts/start_sim.sh urban_rescue x500_lidar_2d_cam` | Micro XRCE-DDS Agent, Gazebo server, PX4 SITL |
 | AerialClaw backend | `SIM_ADAPTER=px4 ... python server.py` | Web console and PX4 adapter on `http://localhost:5001` |
-| Sensor bridge | backend auto-start after adapter connection | camera/LiDAR frames emitted to the Web UI |
+| Sensor bridge | backend auto-start after adapter connection | camera/LiDAR frames emitted to the Web UI; `/api/sensor/camera` returns JPEG |
 | LLM provider | `.env` or Web UI Model Configuration | AI mode can plan and execute natural-language flight tasks |
 
 After the script reports success, open:
@@ -206,7 +206,9 @@ curl http://localhost:5001/api/sensor/status
 Healthy signs:
 
 - `/api/status` returns `initialized` / `current_robot` fields after initialization.
-- `/api/sensor/status` is reachable after the PX4 adapter connects.
+- `/api/sensor/status` returns `"running": true`, `world: urban_rescue`, and `model: x500_lidar_2d_cam_0`.
+- `/api/sensor/status` lists five cameras (`front/rear/left/right/down`) plus LiDAR with increasing `frame_count`.
+- `/api/sensor/camera` returns `Content-Type: image/jpeg` and a non-empty JPEG file.
 - `doctor_gazebo.sh --live` lists Gazebo camera/LiDAR topics.
 - The Web UI cockpit/camera panels show frames instead of `NO SIGNAL`.
 
@@ -246,7 +248,13 @@ cd "$PX4_BUILD"
 ./bin/px4 "$PX4_BUILD" -s "${PX4_BUILD}/etc/init.d-posix/rcS"
 
 # Terminal 4: AerialClaw
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam python server.py
+# macOS/Homebrew Gazebo Python bindings are installed outside the venv, so expose
+# only the Gazebo Cellar site-packages paths. Without this, /api/sensor/status
+# will say the bridge is not running and camera panels will show NO SIGNAL.
+export GZ_PYTHONPATH="/opt/homebrew/Cellar/gz-transport13/13.5.0_8/lib/python3.12/site-packages:/opt/homebrew/Cellar/gz-msgs10/10.3.2_24/lib/python3.12/site-packages:/opt/homebrew/Cellar/gz-math7/7.5.2_3/lib/python3.12/site-packages"
+PYTHONPATH="$GZ_PYTHONPATH:${PYTHONPATH:-}" \
+  SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500_lidar_2d_cam \
+  python server.py
 # Open http://localhost:5001
 ```
 
@@ -313,27 +321,30 @@ push Socket.IO frames to the browser.
 Check the full path:
 
 ```bash
-# Gazebo should expose camera/LiDAR topics
-gz topic -l | grep -Ei 'camera|image|lidar|scan'
+# Gazebo should expose camera/LiDAR topics for the AerialClaw model
+gz topic -l | grep -Ei 'urban_rescue|x500_lidar_2d_cam|camera|image|lidar|scan'
 
-# Start backend with PX4+Gazebo adapter
-SIM_ADAPTER=px4 PX4_GZ_WORLD=urban_rescue PX4_SIM_MODEL=x500 python server.py
-
-# After connecting the adapter, check bridge status
+# After the backend connects, the bridge should be running
 curl http://localhost:5001/api/sensor/status
+
+# The camera HTTP endpoint should return a JPEG, not HTML/500/503
+curl -fsS http://localhost:5001/api/sensor/camera -o /tmp/aerialclaw_camera.jpg
+file /tmp/aerialclaw_camera.jpg
 ```
 
 Expected backend log after the adapter connects:
 
 ```text
-传感器桥接启动 (world=urban_rescue, model=x500_0)
-传感器数据推送线程已启动
+Gazebo sensor bridge started: world=urban_rescue model=x500_lidar_2d_cam_0 topics=[...]
+传感器数据推送线程启动成功
 ```
 
 If status says the bridge is unavailable:
-- install / expose Gazebo Harmonic Python bindings (`gz.transport13`, `gz.msgs10`)
-- verify `PX4_GZ_WORLD` matches your running world
-- verify `PX4_SIM_MODEL` matches the spawned model base name; PX4/Gazebo commonly appends `_0` to the spawned model
+- install / expose Gazebo Harmonic Python bindings (`gz.transport13`, `gz.msgs10`, and on macOS often `gz-math7`)
+- prefer `./scripts/sim_quickstart.sh`, which discovers these paths and exports `PYTHONPATH` for the backend automatically
+- verify `PX4_GZ_WORLD=urban_rescue` matches your running world
+- verify `PX4_SIM_MODEL=x500_lidar_2d_cam` matches the spawned model base name; PX4/Gazebo commonly appends `_0` to the spawned model
+- if `/api/sensor/camera` returns 500 with `ModuleNotFoundError: cv2`, install the pinned dependency from `requirements.txt` (`opencv-python-headless==4.10.0.84`, keeping `numpy<2` for PX4/symforce compatibility)
 - if you renamed links/sensors, update `sim/gz_sensor_bridge.py` topic templates
 
 ### MAVSDK connection fails

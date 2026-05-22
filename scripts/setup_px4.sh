@@ -227,12 +227,8 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 text = text.replace("AerialClaw macOS Clang VLA warning patch", "AerialClaw macOS Clang warning compatibility patch")
-anchor = "			-Wno-error=vla-cxx-extension
-"
-extra = "			-Wno-double-promotion
-			-Wno-error=double-promotion
-			-Wno-error=attributes
-"
+anchor = "\t\t\t-Wno-error=vla-cxx-extension\n"
+extra = "\t\t\t-Wno-double-promotion\n\t\t\t-Wno-error=double-promotion\n\t\t\t-Wno-error=attributes\n"
 if "-Wno-error=double-promotion" not in text and anchor in text:
     text = text.replace(anchor, anchor + extra, 1)
 path.write_text(text, encoding="utf-8")
@@ -412,6 +408,9 @@ fi
 
 ensure_project_python_env
 install_python_requirements "${PX4_DIR}/Tools/setup/requirements.txt" "PX4 Python build requirements"
+info "Installing PX4 macOS Python build compatibility dependencies (symforce, numpy<2)..."
+$PIP_BIN install "numpy<2.0" "symforce>=0.10,<0.11"
+ok "PX4 compatibility dependencies installed"
 
 if ! python3 -c "import kconfiglib" >/dev/null 2>&1; then
     err "PX4 Python dependency check failed: kconfiglib is still not importable from $(command -v python3)"
@@ -431,13 +430,15 @@ if [ "$OS" = "Darwin" ]; then
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
 fi
 
-# Build with Gazebo x500 (this also validates the build)
+# Build the SITL binary only. Do not use `make px4_sitl gz_x500` here:
+# that target launches PX4/Gazebo after the build and can leave an interactive
+# `pxh>` shell writing huge logs. Runtime launch is handled by start_sim.sh.
 if [ -f "build/px4_sitl_default/bin/px4" ]; then
     ok "PX4 SITL binary already exists. Skipping build."
-    echo "  To rebuild: cd $PX4_DIR && make px4_sitl gz_x500"
+    echo "  To rebuild: cd $PX4_DIR && make px4_sitl_default"
 else
     BUILD_LOG="/tmp/aerialclaw_px4_build.log"
-    if make px4_sitl gz_x500 >"$BUILD_LOG" 2>&1; then
+    if make px4_sitl_default >"$BUILD_LOG" 2>&1; then
         ok "PX4 SITL build successful!"
     elif [ -f "build/px4_sitl_default/bin/px4" ]; then
         warn "PX4 build command returned non-zero, but the SITL binary exists and will be used. Full log: $BUILD_LOG"
@@ -448,15 +449,11 @@ else
         echo "Common fixes for macOS ARM64:"
         echo "  export CMAKE_POLICY_VERSION_MINIMUM=3.5"
         echo "  brew install protobuf@33"
+        echo "  $PIP_BIN install 'numpy<2.0' 'symforce>=0.10,<0.11'"
         echo "  See docs/SIMULATION_SETUP.md for detailed troubleshooting"
         exit 1
     fi
 fi
-
-# Kill any processes started by the test build
-pkill -f "gz sim" 2>/dev/null || true
-pkill -f "bin/px4" 2>/dev/null || true
-sleep 2
 
 # ── Step 8: Micro XRCE-DDS Agent ───────────────────────────────
 
