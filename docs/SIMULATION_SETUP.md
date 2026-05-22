@@ -107,6 +107,8 @@ This is the main path for research demonstrations. It is designed for the ACM MM
 
 ### One-command quickstart
 
+`doctor_gazebo.sh` is a readiness checker only: it prints host/PX4/Gazebo dependency status and suggested commands, but it does not start the Web service. Use `sim_quickstart.sh` when you want the actual running demo.
+
 For the first run on a machine that already has basic host tools installed, use:
 
 ```bash

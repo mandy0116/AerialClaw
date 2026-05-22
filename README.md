@@ -271,6 +271,8 @@ Use this path from a normal Windows Python/Node environment after installing Pyt
 
 Use this path when you want the complete showcase: AerialClaw Web UI, PX4/Gazebo SITL, sensor-enabled UAV model, camera/LiDAR bridge, and LLM-driven autonomous flight.
 
+> **Important:** `scripts/doctor_gazebo.sh` only checks whether the host is ready. It does **not** start the Web service. To start the complete demo stack, run `scripts/sim_quickstart.sh`.
+
 First run on a simulator host:
 
 ```bash
@@ -279,22 +281,37 @@ cd AerialClaw
 ./scripts/sim_quickstart.sh --setup
 ```
 
-Later runs:
+Start the complete stack:
 
 ```bash
 ./scripts/sim_quickstart.sh
+```
+
+This starts all required local services:
+
+| Service | Started by | Purpose | Default endpoint/log |
+|---|---|---|---|
+| PX4 SITL + Gazebo server | `scripts/start_sim.sh` via quickstart | Flight controller + simulator physics | `/tmp/aerialclaw_px4.log`, `/tmp/aerialclaw_gz.log` |
+| AerialClaw backend | `scripts/sim_quickstart.sh` | Web UI, REST API, Socket.IO, PX4 adapter, sensor bridge | `http://127.0.0.1:5001`, `/tmp/aerialclaw_full_server.log` |
+| Gazebo GUI | `scripts/sim_quickstart.sh` | Optional simulator visualization window | `/tmp/aerialclaw_gz_gui.log` |
+
+After quickstart prints `Full simulator stack is running`, open:
+
+```text
+http://127.0.0.1:5001
+```
+
+You can also verify the Web service directly:
+
+```bash
+curl http://127.0.0.1:5001/api/status
+curl http://127.0.0.1:5001/api/sensor/status
 ```
 
 Clean restart if an old simulator/backend is still alive:
 
 ```bash
 ./scripts/sim_quickstart.sh --restart
-```
-
-Then open:
-
-```text
-http://localhost:5001
 ```
 
 The default simulator demo uses `urban_rescue` + AerialClaw's modified UAV model `x500_lidar_2d_cam` (front/rear/left/right/down cameras + 2D LiDAR). This model is required for the full showcase. `sim_quickstart.sh` starts PX4/Gazebo, opens Gazebo GUI by default, starts the Web backend with the correct Gazebo Python `PYTHONPATH`, and checks both the sensor bridge and `/api/sensor/camera` JPEG endpoint.
