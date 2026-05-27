@@ -492,7 +492,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
-Developed by ROBOTY Lab, School of Computer Science and Technology, Xidian University.
 
 Inspired by [OpenClaw](https://github.com/openclaw/openclaw). Built with:
 [PX4](https://px4.io/) · [Gazebo](https://gazebosim.org/) · [MAVSDK](https://mavsdk.mavlink.io/) · [React](https://react.dev/) · [Vite](https://vitejs.dev/)
