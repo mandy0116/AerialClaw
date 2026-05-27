@@ -451,7 +451,6 @@ AerialClaw/
 
 ## 致谢
 
-项目由西安电子科技大学计算机科学与技术学院 ROBOTY 实验室开发。
 
 研究思路受到 [OpenClaw](https://github.com/openclaw/openclaw) 项目的启发。基于以下开源技术构建：
 [PX4](https://px4.io/) · [Gazebo](https://gazebosim.org/) · [MAVSDK](https://mavsdk.mavlink.io/) · [React](https://react.dev/) · [Vite](https://vitejs.dev/)
