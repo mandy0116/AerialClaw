@@ -1507,7 +1507,14 @@ def api_sensor_camera():
         b64 = adapter.get_image_base64()
         if b64:
             return Response(base64.b64decode(b64), mimetype="image/jpeg")
-    return Response("No camera available", status=503)
+    return Response(
+        "No camera frame available. If the simulator just started, wait ~30-60s "
+        "for the model to spawn. On Linux with a venv, the Gazebo Python bindings "
+        "(gz.transport / gz.msgs) may not be importable in this environment "
+        "(re-create the venv with --system-site-packages, or set GZ_PYTHONPATH); "
+        "run scripts/doctor_gazebo.sh <world> <model> --live to diagnose.",
+        status=503,
+    )
 
 
 

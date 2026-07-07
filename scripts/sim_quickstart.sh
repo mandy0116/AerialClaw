@@ -260,46 +260,125 @@ ensure_app_python_deps() {
 }
 
 ensure_gazebo_python_path() {
+  # Robust, cross-platform discovery of the Gazebo Python bindings
+  # (gz.transport / gz.msgs). Works on macOS (Homebrew Intel/ARM), Ubuntu/Debian
+  # (apt dist-packages), Conda, /usr/local source installs, and honours the
+  # GZ_PYTHONPATH override. Strategy is layered: try current env first, then let
+  # a Python discoverer glob known roots and VALIDATE each candidate by actually
+  # importing before it is adopted. Nothing is hard-coded to a single OS or
+  # library ABI version (gz-transport13/gz-msgs10 today may change tomorrow).
+
   if "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
     ok "Gazebo Python bindings are importable"
     return
   fi
 
-  local pyver transport_site msgs_site math_site msgs_legacy_site combo
-  pyver="$($PYTHON - <<'PYVER'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PYVER
+  # 1) Respect an explicit user override first.
+  if [ -n "${GZ_PYTHONPATH:-}" ]; then
+    if PYTHONPATH="${GZ_PYTHONPATH}:${PYTHONPATH:-}" "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
+      export PYTHONPATH="${GZ_PYTHONPATH}:${PYTHONPATH:-}"
+      ok "Gazebo Python bindings found via GZ_PYTHONPATH: ${GZ_PYTHONPATH}"
+      return
+    fi
+    warn "GZ_PYTHONPATH is set but did not yield importable gz bindings: ${GZ_PYTHONPATH}"
+  fi
+
+  # 2) Let Python discover a working combination of site dirs. It globs a broad
+  #    set of platform roots, then verifies each candidate set by importing.
+  local discovered
+  discovered="$("$PYTHON" - <<'PYDISCOVER'
+import glob, itertools, os, subprocess, sys
+
+pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+# Broad, version-agnostic root patterns. gz-transport*/gz-msgs* globs cover
+# future ABI bumps; python{ver} and plain python cover layout differences.
+ROOT_PATTERNS = [
+    # macOS Homebrew (ARM + Intel)
+    f"/opt/homebrew/Cellar/gz-*/*/lib/python{pyver}/site-packages",
+    "/opt/homebrew/Cellar/gz-*/*/lib/python",
+    f"/usr/local/Cellar/gz-*/*/lib/python{pyver}/site-packages",
+    "/usr/local/Cellar/gz-*/*/lib/python",
+    # Debian/Ubuntu apt (python3-gz-*)
+    "/usr/lib/python3/dist-packages",
+    f"/usr/lib/python{pyver}/dist-packages",
+    f"/usr/lib/python{pyver}/site-packages",
+    # /usr/local source installs
+    "/usr/local/lib/python3/dist-packages",
+    f"/usr/local/lib/python{pyver}/dist-packages",
+    f"/usr/local/lib/python{pyver}/site-packages",
+    # Conda / other prefixes derived from the running interpreter
+    os.path.join(sys.prefix, "lib", f"python{pyver}", "site-packages"),
+    os.path.join(sys.prefix, "lib", "python3", "dist-packages"),
+]
+
+# Also ask the system where gz is installed, if tooling is available.
+for probe in (
+    ["pkg-config", "--variable=libdir", "gz-transport13"],
+    ["pkg-config", "--variable=libdir", "gz-transport"],
+):
+    try:
+        out = subprocess.run(probe, capture_output=True, text=True, timeout=5)
+        libdir = out.stdout.strip()
+        if libdir:
+            ROOT_PATTERNS.append(os.path.join(libdir, f"python{pyver}", "site-packages"))
+            ROOT_PATTERNS.append(os.path.join(libdir, "python"))
+    except Exception:
+        pass
+
+# Expand globs, keep only dirs that actually contain a gz/ package.
+candidates = []
+for pat in ROOT_PATTERNS:
+    for p in glob.glob(pat):
+        if os.path.isdir(os.path.join(p, "gz")) and p not in candidates:
+            candidates.append(p)
+
+if not candidates:
+    sys.exit(3)
+
+def importable(pythonpath):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [pp for pp in ([pythonpath] + env.get("PYTHONPATH", "").split(os.pathsep)) if pp]
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", "import gz.transport13, gz.msgs10.image_pb2"],
+        env=env, capture_output=True,
+    )
+    return r.returncode == 0
+
+# Try single dirs first (Linux dist-packages usually holds everything).
+for c in candidates:
+    if importable(c):
+        print(c)
+        sys.exit(0)
+
+# Then try combinations (Homebrew splits transport/msgs/math across cellars).
+for n in (2, 3, 4):
+    for combo in itertools.permutations(candidates, min(n, len(candidates))):
+        joined = os.pathsep.join(combo)
+        if importable(joined):
+            print(joined)
+            sys.exit(0)
+
+sys.exit(4)
+PYDISCOVER
 )"
 
-  # Use only Gazebo Cellar paths. Do not add /opt/homebrew/lib/pythonX/site-packages,
-  # because that can shadow the venv with unrelated Homebrew packages.
-  local transport_candidates=("/opt/homebrew/Cellar/gz-transport13"/*"/lib/python${pyver}/site-packages")
-  local msgs_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python${pyver}/site-packages")
-  local math_candidates=("/opt/homebrew/Cellar/gz-math7"/*"/lib/python${pyver}/site-packages")
-  local msgs_legacy_candidates=("/opt/homebrew/Cellar/gz-msgs10"/*"/lib/python")
+  if [ -n "$discovered" ]; then
+    GZ_PYTHONPATH="$discovered${GZ_PYTHONPATH:+:$GZ_PYTHONPATH}"
+    export PYTHONPATH="$discovered:${PYTHONPATH:-}"
+    ok "Gazebo Python bindings found: $discovered"
+    return
+  fi
 
-  for transport_site in "${transport_candidates[@]}"; do
-    [ -d "$transport_site/gz" ] || continue
-    for msgs_site in "${msgs_candidates[@]}"; do
-      [ -d "$msgs_site/gz" ] || continue
-      for math_site in "${math_candidates[@]}"; do
-        [ -d "$math_site/gz" ] || math_site=""
-        for msgs_legacy_site in "${msgs_legacy_candidates[@]}"; do
-          [ -d "$msgs_legacy_site/gz" ] || msgs_legacy_site=""
-          combo="$transport_site:$msgs_site${math_site:+:$math_site}${msgs_legacy_site:+:$msgs_legacy_site}"
-          if PYTHONPATH="$combo:${PYTHONPATH:-}" "$PYTHON" -c "import gz.transport13, gz.msgs10.image_pb2" >/dev/null 2>&1; then
-            GZ_PYTHONPATH="$combo${GZ_PYTHONPATH:+:$GZ_PYTHONPATH}"
-            export PYTHONPATH="$combo:${PYTHONPATH:-}"
-            ok "Gazebo Python bindings found: $combo"
-            return
-          fi
-        done
-      done
-    done
-  done
-
-  warn "Gazebo Python bindings are not importable from the current Python environment; camera panels may show NO SIGNAL."
+  # 3) Nothing worked: give an actionable, platform-aware diagnostic.
+  warn "Gazebo Python bindings (gz.transport / gz.msgs) are not importable in this environment; camera panels may show NO SIGNAL."
+  warn "Fix options:"
+  warn "  - Ubuntu/Debian: install bindings, e.g. 'sudo apt install python3-gz-transport13 python3-gz-msgs10' (match your gz release)."
+  warn "  - venv users on Linux: recreate with system packages visible: 'python3 -m venv venv --system-site-packages'."
+  warn "  - macOS: 'brew install gz-transport13 gz-msgs10 gz-math7'."
+  warn "  - Or point GZ_PYTHONPATH at the dir that contains the 'gz' package and re-run."
 }
 
 ensure_frontend_build() {
