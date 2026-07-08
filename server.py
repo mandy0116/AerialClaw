@@ -1493,12 +1493,27 @@ def api_sensor_camera():
     """获取摄像头图像（支持 Gazebo 和 AirSim）。"""
     import cv2
     import io
+    import numpy as np
     # 优先用 Gazebo sensor bridge
     if state.sensor_bridge:
-        img = state.sensor_bridge.get_camera_image()
-        if img is not None:
-            _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            return Response(buf.tobytes(), mimetype="image/jpeg")
+        try:
+            img = state.sensor_bridge.get_camera_image()
+        except Exception as e:
+            # 传感器桥内部异常不应把整个接口打成 500，降级为可诊断的 503
+            logger.warning("sensor bridge get_camera_image failed: %s", e, exc_info=True)
+            img = None
+        # 严格校验：只有非空、非零尺寸的 numpy 数组才交给 cv2.imencode。
+        # Gazebo Python 绑定缺失/不完整时，get_camera_image 可能泄漏出
+        # 非 numpy 对象（如原始 protobuf 消息或半成品解码结果），
+        # 直接送进 imencode 会抛 "img is not a numpy array" 并 500 崩溃。
+        if isinstance(img, np.ndarray) and img.size > 0:
+            try:
+                ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    return Response(buf.tobytes(), mimetype="image/jpeg")
+                logger.warning("cv2.imencode returned failure for camera frame")
+            except Exception as e:
+                logger.warning("cv2.imencode failed on camera frame: %s", e, exc_info=True)
     # 回退到 AirSim adapter
     from adapters.adapter_manager import get_adapter
     adapter = get_adapter()
