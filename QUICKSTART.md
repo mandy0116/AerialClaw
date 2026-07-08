@@ -37,6 +37,9 @@ git clone https://github.com/XDEI-Group/AerialClaw.git
 cd AerialClaw
 
 python3 -m venv venv
+# Linux note: the full PX4/Gazebo demo needs the system Gazebo Python bindings
+# (gz.transport / gz.msgs), which a plain venv cannot see. On Linux create the
+# venv with system packages visible:  python3 -m venv venv --system-site-packages
 source venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
