@@ -305,6 +305,18 @@ def _try_connect_adapter():
                 state.push_log("warn", f"Adapter degraded to: {adapter.name}")
             _start_telemetry_sync()
 
+            # 若 VLM_BACKEND=a40, 自动拉起 A40 SSH 隧道 (127.0.0.1:5009 → A40:5009)。
+            # Observe 技能在 AirSim / PX4 两条路径下都可能被 LLM 调用, 故在 sim 分支前统一拉起。
+            try:
+                from perception.a40_tunnel import ensure_tunnel_running
+                if ensure_tunnel_running():
+                    if os.environ.get("VLM_BACKEND", "").lower() == "a40":
+                        state.push_log("info", "🔗 A40 VLM 隧道已就绪 (127.0.0.1:5009)")
+                else:
+                    state.push_log("warn", "⚠️ A40 VLM 隧道未就绪, 视觉分析将不可用 (检查 A40 网络或 A40_PASSWORD)")
+            except Exception as e:
+                logger.warning("A40 隧道自动启动异常: %s", e)
+
             # Start simulator-specific sensor streaming.
             # AirSim frames are read via RPC; PX4+Gazebo frames/LiDAR are read
             # from Gazebo Transport topics by sim.gz_sensor_bridge.
@@ -312,10 +324,13 @@ def _try_connect_adapter():
                 _start_airsim_camera_stream()
                 # 启动被动感知引擎
                 _start_passive_perception()
-            elif sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1":
+            elif sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") \
+                    or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1" \
+                    or os.getenv("AERIALCLAW_REAL_CAMERA_BRIDGE") == "1":
                 # Gazebo camera/LiDAR topics are independent from MAVSDK control connectivity.
                 # Start the sensor bridge even if the PX4 adapter is still connecting or degraded,
                 # so the Web UI can show the AerialClaw modified UAV sensors as soon as Gazebo is up.
+                # AERIALCLAW_REAL_CAMERA_BRIDGE=1 时改用真机相机桥（实机部署，无 Gazebo）。
                 _start_sensor_bridge()
 
         except Exception as e:
@@ -628,18 +643,27 @@ def _start_sensor_bridge():
     """启动 Gazebo 传感器桥接，开始推送相机和雷达数据到前端。"""
     def _init_bridge():
         try:
-            from sim.gz_sensor_bridge import GzSensorBridge
             from skills.perception_skills import set_sensor_bridge
 
-            # 从 start.py 传入的环境变量读取 world 名
-            world = os.environ.get("PX4_GZ_WORLD", "urban_rescue")
-            model = os.environ.get("PX4_SIM_MODEL", "x500_lidar_2d_cam") + "_0"
-            bridge = GzSensorBridge(model_name=model, world_name=world)
+            if os.getenv("AERIALCLAW_REAL_CAMERA_BRIDGE") == "1":
+                # 真机部署：从真实相机流（SIYI A8 Mini RTSP 等）抓帧，替代 Gazebo 传感器桥。
+                # 流地址用 REAL_CAMERA_URLS / REAL_CAMERA_<DIR>_URL 配置（默认 gimbal 指 SIYI）。
+                from sim.real_sensor_bridge import RealSensorBridge
+                bridge = RealSensorBridge()
+                label = "real_camera"
+            else:
+                # 仿真：Gazebo 传感器桥
+                from sim.gz_sensor_bridge import GzSensorBridge
+                # 从 start.py 传入的环境变量读取 world 名
+                world = os.environ.get("PX4_GZ_WORLD", "urban_rescue")
+                model = os.environ.get("PX4_SIM_MODEL", "x500_lidar_2d_cam") + "_0"
+                bridge = GzSensorBridge(model_name=model, world_name=world)
+                label = f"world={world}, model={model}"
 
             if bridge.start():
                 state.sensor_bridge = bridge
                 set_sensor_bridge(bridge)
-                state.push_log("success", f"📷 传感器桥接启动 (world={world}, model={model})")
+                state.push_log("success", f"📷 传感器桥接启动 ({label})")
                 logger.info("开始启动传感器数据推送线程...")
                 # 启动数据推送线程
                 try:
@@ -654,7 +678,7 @@ def _start_sensor_bridge():
                 # 启动感知守护线程
                 _start_perception_daemon()
             else:
-                state.push_log("warn", "传感器桥接启动失败（Gazebo 可能未运行）")
+                state.push_log("warn", f"传感器桥接启动失败 ({label})")
 
         except ImportError as e:
             state.push_log("warn", f"传感器桥接不可用: {e}")

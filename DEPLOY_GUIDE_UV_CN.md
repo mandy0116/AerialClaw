@@ -383,3 +383,442 @@ find PX4-Autopilot/build -type f -name '*.ulg' -delete
   4. XRCE Agent 已装，跳过其编译安装
 - LLM 详细配置：`docs/LLM_CONFIG.md`
 - 架构与传感器桥接原理：`docs/SIMULATION_SETUP.md` 的「Sensor Configuration」「Manual Start」两节
+
+---
+
+# 第二部分：Sim2Real 实机部署（Jetson NX + PX4 真机 + SIYI A8 Mini）
+
+> 目标：把 AerialClaw 从 Gazebo 仿真迁到真机 —— Jetson Xavier/Orin NX 上跑 `server.py`，通过串口控制真实 PX4 飞控，用真实 SIYI A8 Mini 云台相机。
+> 适用对象：仿真已跑通、要把同一套代码搬到无人机伴飞电脑上做实机的人。
+> 生成日期：2026-07-27
+>
+> **本部分针对的机器是无人机上的 NX（用户 `nvidia`，家目录 `/home/nvidia`），不是第一部分那台开发/仿真机。** 凡是命令，都会标【在哪台机器上跑】。
+
+---
+
+## S0. 实机 vs 仿真：什么不变、什么要换（先建立认知）
+
+| 环节 | 仿真（第一部分） | 实机（本部分） | 处理 |
+|---|---|---|---|
+| 飞控 | PX4 SITL（`udp://:14540`） | 真实 Pixhawk，串口 UART | 改 `PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600`，代码不动 |
+| Gazebo / PX4-Autopilot 源码 / MicroXRCEAgent | 必需 | **不需要** | 实机不跑仿真，这三样在 NX 上不装 |
+| GPU 渲染（PRIME offload） | 必需（相机/gpu_lidar 渲染） | **不需要** | 真机相机是真实视频流，不渲染；NX 有没有独显都行 |
+| 传感器（IMU/GPS/mag） | gz 传感器 | 飞控真实传感器，经 MAVLink | `px4_adapter` 遥测照常工作，不用 gz |
+| 相机画面 | `gz_sensor_bridge`（Gazebo topic） | SIYI 真实视频流 | **缺口**：需写 `RealSensorBridge`（见 S7） |
+| 云台 | `ros2/gimbal_sim_bridge.py`（假桥） | 真实 `photo_function` 节点（a8_mini 后端） | 换节点，`gimbal_control` 技能代码不变 |
+| LLM/VLM | 云端 glm/deepseek | 同（NX 需联网） | 配置文件手动拷（gitignore 了） |
+| 安全 | 无所谓 | 真桨、必须 failsafe/RC 接管 | **S9 整节必读** |
+| GPS 精度 | cm 级 | ±2-3m（无 RTK） | `fly_to` 会有米级偏差，见 S5 注 |
+
+**一句话**：飞控和云台几乎"改个连接串/换个节点"就能上；相机可视化是唯一需要补代码的缺口；安全是新增的硬性要求。
+
+---
+
+## S1. 硬件清单与接线
+
+| 部件 | 连到 NX 的方式 | 备注 |
+|---|---|---|
+| PX4 飞控（Pixhawk，固件推荐 **v1.15.4**） | UART → `/dev/ttyTHS1`（TX/RX/GND 交叉接） | TELEM 口，波特率匹配 `SER_TELx_BAUD`（常用 921600 或 57600） |
+| SIYI A8 Mini 云台相机 | 以太网（`192.168.144.253`）+ 串口控制（可走 `/dev/ttyTHS2`） | 视频走网口，云台控制可走网口或串口 |
+| RC 接收机 → 飞控 | 接飞控 RC 口 | **手动接管通道必配**，软件挂了能手动飞 |
+| NX 电源 / 飞控电池 | 各自供电 | 共地 |
+
+> ⚠️ 飞控固件版本：项目针对 **PX4 v1.15.4**，开发机仿真用的是 main（v1.17-alpha1），已逐个绕过 main 的不兼容。**实机飞控固件建议统一刷 v1.15.4**，避免参数/API 差异。若用 main 固件，需带上本会话对 start_sim/世界/模型的修复，但实机不跑 gz，多数修复不相关。
+
+### 先在 NX 上确认硬件可见（已为你跑过，结论见下）
+
+```bash
+# 【NX】
+ls -l /dev/ttyACM* /dev/ttyTHS* /dev/ttyUSB* 2>/dev/null   # 飞控/相机串口
+ip addr | grep -E "192.168.144|usb"                        # SIYI 网口
+ls /opt/ros/humble/setup.bash                              # ROS2
+ls ~/ifc_pro/install/setup.bash 2>/dev/null                # 真机 photo_function
+```
+
+**你这次实测结论**：`/dev/ttyTHS1`、`/dev/ttyTHS2` 在（飞控大概率 `ttyTHS1`）；ROS2 humble ✅；`~/ifc_pro` ❌ 未构建；SIYI 网口 ❌ 未连（usb0/usb1 都 DOWN）。所以下面 S5 先跑飞控，S6/S7 等 SIYI 接好 + ifc_pro 构建后再做。
+
+---
+
+## S2. NX 环境准备
+
+**需要装的**：Ubuntu 22.04 + Python 3.10（系统自带）+ ROS2 humble（已装）。
+**不需要装的**（仿真专属，实机装了也是浪费）：Gazebo、PX4-Autopilot 源码、MicroXRCEAgent、NVIDIA PRIME offload 那套。
+
+串口权限（飞控 `ttyTHS1` 是 `root:dialout`，`nvidia` 用户要在 dialout 组里）：
+
+```bash
+# 【NX】
+id | grep dialout
+# 不在就加，加完必须注销重登（或 newgrp dialout）：
+sudo usermod -aG dialout $USER
+```
+
+---
+
+## S3. 同步代码 + 配置到 NX
+
+代码用 rsync 从开发机传，**排除仿真专属的大目录**（在开发机上跑）：
+
+```bash
+# 【开发机】
+rsync -avz --progress \
+  --exclude='.git' \
+  --exclude='.venv' \
+  --exclude='PX4-Autopilot' \
+  --exclude='ui/node_modules' \
+  --exclude='logs' \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  /home/ubuntu/AerialClaw/ nvidia@<NX的IP>:~/AerialClaw/
+```
+
+> 排除 `PX4-Autopilot`：实机不跑 SITL，这个几 GB 的编译产物不需要。
+> 排除 `.venv`：x86 的 venv 在 arm64 NX 上用不了，S4 重建。
+> `ui/dist` **不排除**：直接用构建好的前端，NX 上不用 npm build。
+
+**两个 gitignore 配置文件必须单独拷**（rsync 默认会传，但要确认；若用 git clone 则不会跟过去）：
+
+```bash
+# 【开发机】—— 含 glm token，没它 planner 直接 401
+scp .env .aerialclaw_llm_config.json nvidia@<NX的IP>:~/AerialClaw/
+```
+
+```bash
+# 【NX】确认到位
+ls -l ~/AerialClaw/.env ~/AerialClaw/.aerialclaw_llm_config.json
+```
+
+**还要把 `ifc_pro` 源码传到 NX**（S6 构建真机 photo_function 用）：
+
+```bash
+# 【开发机】
+rsync -avz --exclude='build' --exclude='install' --exclude='log' \
+  /home/ubuntu/ifc_pro/ nvidia@<NX的IP>:~/ifc_pro/
+```
+
+---
+
+## S4. 建虚拟环境 + 装依赖（NX 上）
+
+和仿真指南同样的关键三参数：**Python 3.10 + `--system-site-packages`**（ROS2 apt 绑定是 cpython-310，必须 3.10 导入）。但 NX 上 uv 可能连不上它的下载镜像（你已遇到 `uv.agentsmirror.com` 超时），所以**用系统自带 3.10、不让 uv 下载**：
+
+```bash
+# 【NX】
+cd ~/AerialClaw
+# 确认系统 3.10
+python3.10 --version
+
+# 用绝对路径指定解释器，uv 不会再去镜像下载
+uv venv --python /usr/bin/python3.10 --system-site-packages .venv
+# 若 uv 仍卡镜像，改用系统 venv 完全绕开 uv：
+#   sudo apt install -y python3.10-venv
+#   python3.10 -m venv .venv --system-site-packages
+
+# 装依赖
+uv pip install -r requirements.txt
+# uv pip 也走镜像失败的话：
+#   .venv/bin/pip install -r requirements.txt
+```
+
+验证：
+
+```bash
+# 【NX】
+source .venv/bin/activate
+python -c "import flask, flask_socketio, flask_cors, mavsdk, cv2; print('后端依赖 OK')"
+python -c "import rclpy; print('rclpy OK')"   # 云台桥接/真机节点需要
+```
+
+> 若 NX 外网整体受限（连 pypi.org 都不通），在开发机离线打包再传：
+> ```bash
+> # 【开发机】pip download -r requirements.txt -d /tmp/pkgs && rsync /tmp/pkgs nvidia@<IP>:/tmp/pkgs
+> # 【NX】.venv/bin/pip install --no-index --find-links=/tmp/pkgs -r requirements.txt
+> ```
+
+---
+
+## S5. 连接飞控 PX4（核心，先跑通这条）
+
+`px4_adapter` 只是把 `PX4_MAVSDK_URL` 透传给 `mavsdk.System.connect()`，MAVSDK 原生支持串口，**代码不用改**。
+
+```bash
+# 【NX】拆桨状态下启动
+cd ~/AerialClaw
+source .venv/bin/activate
+export SIM_ADAPTER=px4
+export PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600   # 端口/波特率按你接线改；不行再试 57600
+# 关掉仿真专属的 gz 传感器桥（实机没 Gazebo）
+export AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE=0
+.venv/bin/python server.py
+```
+
+验证飞控连上：
+
+```bash
+# 【NX】另开终端
+curl -s http://localhost:5001/api/adapter/status
+# 期望: {"adapter":"px4","connected":true, "state":{"armed":false,"in_air":false,...}}
+```
+
+- `connected:true` 但 `armed` 一直 false → 看飞控是否有 GPS fix、preflight 检查是否通过（PX4 `COM_DISARM_PRFLT` 等参数）。
+- `connected:false` → 90% 是波特率或端口不对。换 `57600`、换 `ttyTHS2` 再试；或 `dmesg | grep tty` 确认串口枚举。
+- 权限拒绝（`Permission denied: /dev/ttyTHS1`）→ S2 的 dialout 组没生效，重新登录。
+
+> ⚠️ **GPS 精度提示**：`fly_to_ned` 用 GPS 转 NED，真实 GPS（无 RTK）误差 ±2-3m，仿真是 cm 级。所以"向东飞 30 米"实机可能落在 27-33 米。要更准需 RTK 或光流。LLM agent 的"到位"判断也要容忍这个误差。
+
+> ⚠️ **第一次只做地面测试**：拆桨。在网页 manual 模式点 arm/disarm，听电机响应音；再点 takeoff（拆桨时电机空转），立刻 stop_execution 看能否停住。**确认 stop 能停再上桨**。
+
+---
+
+## S6. 云台 SIYI A8 Mini + 真机 photo_function 节点
+
+仿真用 `ros2/gimbal_sim_bridge.py` 当假桥；真机换**真实 `photo_function` 节点**（a8_mini 后端直连 SIYI 实物）。`gimbal_control` 技能走的是 `/common/camera/*` ROS2 服务，**两边 API 一样，技能代码完全不改**。
+
+### 1) 在 NX 上构建 photo_function（你目前 `~/ifc_pro` 是空的）
+
+```bash
+# 【NX】
+sudo apt install -y python3-colcon-common-extensions ros-humble-rclpy
+cd ~/ifc_pro
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+ros2 pkg list | grep -i photo   # 确认包存在
+```
+
+### 2) 连通 SIYI A8 Mini
+
+SIYI A8 Mini 默认 IP `192.168.144.253`。NX 的以太网口要配同网段：
+
+```bash
+# 【NX】把连 SIYI 的那个网口配静态 IP（接口名按实际，如 eth0/usb0）
+sudo ip addr add 192.168.144.10/24 dev <接口名>
+ping 192.168.144.253            # 要通
+```
+
+> 视频流地址通常是 `rtsp://192.168.144.253:8554/live`（**以 SIYI 实测/文档为准**），S7 相机桥要用。
+
+### 3) 启动真机 photo_function 节点（替代 sim_bridge）
+
+```bash
+# 【NX】
+source /opt/ros/humble/setup.bash
+source ~/ifc_pro/install/setup.bash
+ros2 run <photo_function 包> <a8_mini 节点可执行名>   # 按 ifc_pro README 的说明起
+# 验证服务在
+ros2 service list | grep -E "common/camera"
+# 期望看到 set_angle / manual_zoom / get_current_zoom / get_attitude ...
+```
+
+### 4) 真机 zoom 语义差异（重要）
+
+仿真桥 `manual_zoom` 每步 0.5x；**真机是连续变焦**，`direction:1` 开始拉近、`direction:0` 停。当前 `gimbal_skill.py` 的 `zoom_in/out` 是"调 N 次 ManualZoom(direction:1) 再调一次 direction:0"——在真机上这相当于"拉近持续 N 次调用时长再停"，步数和倍率不是线性关系。**上真机前要实测校准** `ZOOM_STEP_X`（`gimbal_skill.py:26`）和 `zoom_in` 循环逻辑，或改用按目标倍率控制的方式。先在地面手动测：调一次 `manual_zoom direction:1` 持续 1 秒能放大多少倍，据此调参。
+
+---
+
+## S7. 相机画面可视化（已实现）
+
+`sim/gz_sensor_bridge.py` 是 Gazebo 专用（订阅 gz transport topic），真机上没有 Gazebo，前端 `sensor_cameras`（前/后/左/右/下/云台）会没源。已新增 **`sim/real_sensor_bridge.py`**，实现和 `GzSensorBridge` 相同的接口（`start/is_running/get_camera_image/get_camera_info/get_lidar_scan/get_lidar_info/get_status`），从 SIYI 真实视频流（RTSP）抓帧，每路一个独立线程保留最新帧 + 断流自动重连。`server.py` 已接入：`AERIALCLAW_REAL_CAMERA_BRIDGE=1` 时 `_init_bridge` 改用 `RealSensorBridge`，`_try_connect_adapter` 据此触发 `_start_sensor_bridge()`。
+
+### 要实现的接口（`server.py` 调用的那几个）
+
+```python
+class RealSensorBridge:
+    is_running: bool
+    def get_camera_image(self, direction="front") -> np.ndarray | None  # 返回 BGR 帧
+    def get_camera_info(self, direction="front") -> dict                 # {width,height,fps}
+    def get_lidar_scan(self) -> dict | None                              # 真机若无 2D 雷达可返回 None
+    def get_lidar_info(self) -> dict
+    def get_status(self) -> dict
+```
+
+### 最小骨架（SIYI RTSP → JPEG）
+
+```python
+# sim/real_camera_bridge.py （新建）
+import cv2, threading, time, numpy as np
+
+class RealSensorBridge:
+    # 实机一般只有一个云台相机；其余方位可用同一流或留空
+    STREAMS = {
+        "gimbal": "rtsp://192.168.144.253:8554/live",   # 以 SIYI 实测为准
+        # "front": "rtsp://...",  # 若有其它相机再填
+    }
+    def __init__(self):
+        self._caps, self._frames, self._info, self._stop = {}, {}, {}, False
+        for d, url in self.STREAMS.items():
+            c = cv2.VideoCapture(url)
+            self._caps[d] = c
+            self._frames[d] = None
+            self._info[d] = {"width": 0, "height": 0, "fps": 0.0}
+        self.is_running = True
+        threading.Thread(target=self._loop, daemon=True).start()
+    def _loop(self):
+        while not self._stop:
+            for d, c in self._caps.items():
+                ok, f = c.read()
+                if ok:
+                    self._frames[d] = f
+                    self._info[d] = {"width": f.shape[1], "height": f.shape[0], "fps": 15.0}
+            time.sleep(0.05)   # ~20fps
+    def get_camera_image(self, direction="gimbal"):
+        return self._frames.get(direction)
+    def get_camera_info(self, direction="gimbal"):
+        return self._info.get(direction, {"width":0,"height":0,"fps":0.0})
+    def get_lidar_scan(self): return None
+    def get_lidar_info(self): return {"fps": 0.0}
+    def get_status(self):
+        return {"running": self.is_running,
+                "cameras": {d: {"direction": d, **self._info[d]} for d in self._caps}}
+```
+
+### 接进 `server.py`
+
+`server.py` 的 `_start_sensor_bridge` 已改：`AERIALCLAW_REAL_CAMERA_BRIDGE=1` 时起 `RealSensorBridge`，`_try_connect_adapter` 也据此触发（无需 `SIM_ADAPTER=px4`，配 `SIM_ADAPTER=mock` 即可，适合不飞只测云台）。`_start_sensor_stream` 不用改 —— 它只调桥的 `get_camera_image/get_camera_info`，真机桥和 gz 桥接口一致；未配置的方向（front/rear/...）返回 None，前端显示 NO SIGNAL，只有 gimbal 出画面。
+
+### 启用（云台测试，不飞）
+
+```bash
+# 【NX】起 server.py 的终端（不要 source ifc_pro，避免 protobuf 冲突）
+cd ~/AerialClaw && source .venv/bin/activate
+export IFC_PRO_DIR=/home/nvidia/ifc_pro                  # gimbal_skill 子进程要用
+export SIM_ADAPTER=mock                                   # 不连飞控
+export AERIALCLAW_REAL_CAMERA_BRIDGE=1                    # 用真机相机桥
+# SIYI RTSP 地址若非默认再覆盖（默认 gimbal=rtsp://192.168.144.253:8554/live）：
+# export REAL_CAMERA_GIMBAL_URL=rtsp://192.168.144.253:8554/live
+.venv/bin/python server.py
+```
+
+云台控制节点另开终端起（source ROS2+ifc_pro）：`ros2 run photo_function camera_service_node`。
+
+### 前置检查
+
+```bash
+# 【NX】opencv 带 FFMPEG 才能抓 RTSP
+python -c "import cv2; print(cv2.getBuildInformation())" | grep -i FFMPEG
+# 期望: FFMPEG: YES。若 NO，opencv-python-headless 不带 ffmpeg，需换带 ffmpeg 的构建或用 gst 管道。
+```
+
+### 验证
+
+- `curl -s http://<NX>:5001/api/sensor/status` → `running:true`、`cameras.gimbal.frame_count` 在涨。
+- 网页云台画面格（◎ GIMBAL / ◎ 云台）出真实视频，不是 NO SIGNAL。
+- `gimbal_control` 转云台时，画面应同步转动（SIYI 视频流跟随云台）。
+
+### 暂时跳过可视化
+
+如果先不补相机桥，飞控 + 云台控制 + LLM agent 照常工作，只是 UI 看不到画面。建议先把飞控跑通，相机可视化随后再补。
+
+---
+
+## S8. LLM/VLM 配置
+
+**LLM（规划）**：配置文件已在 S3 拷到 NX（`.aerialclaw_llm_config.json` 含 glm token）。确认：
+
+```bash
+# 【NX】
+curl -s http://localhost:5001/api/llm/config | python3 -m json.tool | head
+# 期望 active_provider=glm，deepseek/glm 都在
+```
+
+- glm token 与 Claude Code 会话共享额度、**可能过期**。401 了就回开发机重取 token 更新 `.aerialclaw_llm_config.json`，或切 `deepseek`（`curl -X PUT /api/llm/active -d '{"provider":"deepseek"}'`）。
+- NX 若联网不稳/受限，可跑本地 Ollama（arm64 有构建）：`ollama pull qwen2.5:7b`，`.env` 设 `ACTIVE_PROVIDER=ollama_local`。Xavier NX 8GB 跑 7b 紧（Orin NX 16GB 更稳），建议用 `qwen2.5:3b`。
+
+**VLM（视觉，"观察/拍照分析"用）**：当前 VLM 走 `deepseek-v4-flash`（**纯文本、无视觉**）。实机若要让 agent 真的"看"画面（observe/scan_area 技能），必须配视觉模型：
+- 云端 vision API（gpt-4o / 智谱 glmv / 通义 qwen-vl），或
+- 本地 `ollama pull qwen2.5-vl:7b`，`.env` 把 `VLM_*` 指到 Ollama。
+- 否则视觉类技能会报错或得到空描述 —— 不影响飞行控制，只影响"看"。
+
+---
+
+## S9. 安全护栏（实机必做，不能跳）
+
+真桨 + 软件能自主发飞指令 = 有伤人风险。**首飞前逐条确认**：
+
+1. **RC 手动接管全程**：RC 开关绑一个通道切 PX4 Position/Manual 模式，软件失控时能瞬间手动接管。这是最后一道防线，独立于软件。
+2. **飞控 failsafe**：PX4 里设好 —— 信号丢失 → RTH/Land、低电量 → Land、地理围栏（`GF_*` 参数）按场地框定。
+3. **`_MAX_ALT` 按场地调小**：`adapters/px4_adapter.py:15` 的 `_MAX_ALT=200`，实机按场地限高调小（如 30-50m）。
+4. **离地高度限制**：agent 提示词已强制 `down ≤ -8`（≥8m 离地），但真机要再核对。
+5. **测试阶梯**：拆桨 arm/disarm → 拆桨 takeoff/stop → 系绳悬停 → 空旷地低空短悬 → 再放自主。
+6. **LLM 决策护栏（待加代码）**：仿真没有，实机建议在 skill 层加：执行移动技能前检查 `GPS fix` 是否 3D+、是否已 armed、单次位移距离上限（防 agent 下发飞 200 米）、是否在地理围栏内。这块是新增代码，需要再写。
+7. **`stop_execution` 实测**：网页点停止，确认 `adapter.request_stop()` + `hover/land` 真能让真机停住。
+
+---
+
+## S10. 启动 + 验证（实机完整流程）
+
+```bash
+# 【NX】
+cd ~/AerialClaw
+source .venv/bin/activate
+export SIM_ADAPTER=px4
+export PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600
+export AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE=0      # 不起 gz 桥；若已接 RealSensorBridge 则去掉这行
+.venv/bin/python server.py
+```
+
+从地面浏览器访问（NX 的 IP）：
+
+```
+http://<NX的IP>:5001
+```
+
+**验证顺序**（拆桨）：
+
+1. `curl -s http://<NX>:5001/api/adapter/status` → `connected:true`
+2. 网页 manual 模式：arm → 电机响应 → disarm。✅
+3. takeoff（拆桨空转）→ stop_execution → 停住。✅
+4. 上桨 → 室外空旷 → 系绳 → 低空悬停 30 秒。✅
+5. 切 AI 模式，发"起飞至 5 米并悬停"，手放在 RC 接管开关上。✅
+6. （SIYI 接好后）`ros2 service list | grep camera` → 云台服务在；网页发"云台转向左前方并放大一倍"。✅
+7. （相机桥接好后）`curl -s http://<NX>:5001/api/sensor/status` → `running:true`、gimbal `frame_count` 在涨；网页云台画面有图。✅
+
+---
+
+## S11. 排障速查（实机版）
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| `Permission denied: /dev/ttyTHS1` | dialout 组没生效 → `id` 看不到 dialout 就重新登录 |
+| `adapter connected:false` | 端口/波特率不对 → 换 `57600`/`ttyTHS2`；`dmesg \| grep tty` 确认枚举 |
+| `Stream removed / 50051 Connection refused` | mavsdk_server 崩了（已加自愈，~8s 自动重连）；持续不通就重启 server |
+| `ros2 service list` 没有 `common/camera/*` | 真机 photo_function 节点没起，或 `source install/setup.bash` 没做 |
+| `ping 192.168.144.253` 不通 | SIYI 没上电/网线没插；NX 网口没配 192.168.144.x 同网段 |
+| 云台 zoom 不生效 / 超调 | 真机连续变焦语义和仿真不同，需校准 `ZOOM_STEP_X` 和 zoom_in 循环（S6.4） |
+| 相机画面 NO SIGNAL | 还没接 `RealSensorBridge`（S7），或 RTSP 地址不对 |
+| GPS 不解锁 / `armed` 一直 false | 没搜到星 → 室外等 3D fix；或 pref-light 检查未过（看 PX4 `commander check`） |
+| LLM 401 / `无法连接模型服务` | glm token 过期或 NX 断网；切 deepseek 或本地 ollama |
+| `fly_to` 落点偏几米 | 真实 GPS ±2-3m，正常；要更准上 RTK/光流 |
+
+---
+
+## S12. 与仿真指南（第一部分）的对照：哪些跳过
+
+| 仿真指南步骤 | 实机是否需要 |
+|---|---|
+| ① 软链接 PX4-Autopilot | ❌ 跳过（实机不跑 SITL，不需要 PX4 源码） |
+| ② uv venv 3.10 + system-site-packages | ✅ 同样要做（S4），但用系统 python、不带 `--seed` |
+| ③ pip install requirements | ✅ 同（S4） |
+| ④ setup_px4.sh 装模型/世界 | ❌ 跳过（实机没 Gazebo，不需要模型/世界） |
+| ⑤ npm build 前端 | ❌ 跳过（用 rsync 传过去的 `ui/dist`） |
+| ⑥ 配 LLM | ✅ 同（S8），但配置文件要手动拷 |
+| ⑦ sim_quickstart.sh | ❌ 跳过（那是起 Gazebo+PX4 SITL 的）；实机直接 `python server.py`（S10） |
+| ⑧ 验证 | ✅ 同思路，但用 `/api/adapter/status` 看飞控，不用 doctor_gazebo |
+| 排障 E（protobuf 共存） | ⚠️ 部分相关：若 NX 上 gz 绑定和 mavsdk 共存仍需 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`；纯实机不导入 gz 绑定则不需要 |
+| 排障 F（PRIME offload / GPU 渲染） | ❌ 跳过（实机不渲染） |
+
+---
+
+## S13. 实机部署待确认/待补清单（来自 WORKLOG 交接）
+
+1. **PX4 固件版本**：建议统一 v1.15.4（项目针对版本），避免 main 的参数/API 差异。
+2. **飞控串口端口/波特率**：确认 `ttyTHS1` 还是 `ttyTHS2`、921600 还是 57600。
+3. **SIYI 实物 IP/端口 + RTSP 地址**：默认 `192.168.144.253`，RTSP 路径以实测为准。
+4. **真机 zoom 校准**：`manual_zoom` 连续变焦，需实测每秒放大倍率，调 `gimbal_skill.py` 的 `ZOOM_STEP_X` 与循环逻辑。
+5. **RealSensorBridge 实现**：S7 骨架 + server.py 分支接入（我可在 SIYI 接好后帮你写完整）。
+6. **VLM 视觉模型**：若要"观察/拍照分析"指令，配云端 vision 或本地 `qwen2.5-vl`。
+7. **LLM 决策护栏代码**：skill 层 GPS fix / armed / 单次位移上限 / geofence 检查（S9.6，待加）。
+8. **RTL 降落行为**：PX4 main 仿真中 RTL 回 home 后转 HOLD 不自动着陆；实机确认 `RTL_LAND_FINAL` 参数或保留强制 land 逻辑。
+9. **mavsdk_server 重连**：数传断连更频繁，重点验证自愈窗口内的技能失败重试。
+10. **起飞重量**：SIYI A8 Mini 重量计入总重，确认推力余量。
+11. **代码提交策略**：仿真侧诸多修改未提交（`git status` 可见），迁移前决定提交/打包，避免遗漏 `config.py`/`agent_loop.py`/`server.py`/`px4_adapter.py`/`gimbal_skill.py` 等关键改动。

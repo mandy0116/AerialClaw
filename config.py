@@ -116,6 +116,7 @@ PROVIDERS: dict[str, dict] = {
 
     "vlm": {
         "api_type":      "openai_compat",
+        "backend":       _env("VLM_BACKEND", "openai_compat"),  # openai_compat | a40
         "base_url":      _env("VLM_BASE_URL", _env("LLM_BASE_URL", "https://api.openai.com/v1")),
         "api_key":       _env("VLM_API_KEY", _env("LLM_API_KEY", "")),
         "default_model": _env("VLM_MODEL", "gpt-4o"),

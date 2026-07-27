@@ -4,6 +4,73 @@
 
 ---
 
+## 2026-07-25 — 实机迁移交接总结（vs 原 git 仓库 / 环境要求 / 待确认点）
+
+> 面向队友对接实机迁移。下文为本会话及前序会话累计改动的高度概括，细节见同日其它条目与 `DEPLOY_GUIDE_UV_CN.md`。
+
+### 一、改动总览（相对原 git 仓库）
+
+#### A. 部署/启动脚本修复（让项目能在本机 PX4-main + gz-Harmonic 跑起来）
+- `scripts/start_sim.sh` + `scripts/sim_quickstart.sh`：加 `GZ_SIM_SYSTEM_PLUGIN_PATH` 指向 PX4 build 的 `gz_plugins` 目录。**否则 gz 找不到 `MotorFailurePlugin` → ruby CLI 段错误 → gz 崩 → PX4 rcS 返回 2、仿真起不来。** 这是本机最关键的潜在 bug。
+- `scripts/start_sim.sh` + `scripts/sim_quickstart.sh`：加 NVIDIA PRIME offload（`__NV_PRIME_RENDER_OFFLOAD=1` 等）。混合显卡笔记本（AMD 核显 + NVIDIA 独显）上 gz 传感器渲染必须走独显，否则 Mesa EGL `dri2 screen` 失败、摄像头/gpu_lidar 0 帧。`GZ_FORCE_NVIDIA_OFFLOAD=0` 可关。
+- `scripts/start_sim.sh` + `scripts/doctor_gazebo.sh`：加 `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`。gz apt 绑定（protobuf 3.12）与 pip mavsdk（protobuf 7.x）同进程共存必需，否则 mavsdk 导入崩。
+- 新增 `scripts/start_custom_sim.sh`：用自定义飞机/世界模型的启动器（自动把 `sim/models/<model>`、`sim/worlds/<world>.sdf` 安装到 gz/PX4 运行时路径）。
+- 新增 `scripts/start_gimbal_bridge.sh`：启动 rclpy 云台桥接（source ROS2 + ifc_pro install + protobuf 纯 Python）。
+
+#### B. 云台功能（photo_function 仿真桥接 + 语言控制）
+- `sim/models/x500_lidar_2d_cam/model.sdf`：加 pan/tilt 云台（`gimbal_yaw_link`/`gimbal_pitch_link`/`gimbal_cam_link` + 两个 revolute 关节 + `JointPositionController`，topic `gimbal/yaw_cmd`、`gimbal/pitch_cmd`）+ `gimbal_cam` 相机。云台 link 轻量(0.05/0.04/0.02kg) + 关节阻尼(1.5)+摩擦(0.02) + 惯量(1e-4) + PID(p=3,i=0.2,d=0.5) —— 解决三件事：ODE collide 崩溃（轻 link 无阻尼重力下垂狂摆）、到位精度（i_gain 消除稳态误差，0.5rad 命令→0.499rad）、不影响起飞（总重 0.11kg）。
+- 新增 `ros2/gimbal_sim_bridge.py`：rclpy 节点，实现 photo_function ROS 服务（`set_angle`/`rotate_gimbal`/`manual_zoom`/`get_current_zoom`/`get_max_zoom`/`get_attitude`/`center_gimbal`，前缀 `common/camera/`）→ 翻译成 gz transport `Double` 命令。**仿真/真机同一套 ROS 服务 API，AerialClaw 技能代码不变。**
+- `sim/gz_sensor_bridge.py`：加 `gimbal` 相机方向（订阅 `gimbal_cam/image`）+ 订阅 `/gimbal/zoom_level` 做数字变焦（中心裁剪放大回原尺寸）。
+- 新增 `skills/gimbal_skill.py` + `skills/docs/gimbal_control.md`：`gimbal_control` 技能（point/zoom_in/zoom_out/zoom_stop/center/rotate），用 `subprocess` 调 `ros2 service call`（内部 source ROS2+ifc_pro，不污染 server.py 主进程）。`server.py:148` `ALL_SKILL_FACTORIES` 注册。
+- `server.py`：`_start_sensor_stream` 的 `DIRECTIONS` 加 `gimbal`，云台帧推前端。
+- UI（`SensorPanel.jsx`/`AiMonitorPanel.jsx`/`CockpitView.jsx`）：加云台相机格/快捷键`6`/PiP。
+
+#### C. 仿真稳定性 / 模型修复
+- `sim/worlds/urban_rescue.sdf`：加 `<magnetic_field>` + `gz-sim-magnetometer-system` 插件。**否则磁罗盘 0 数据、EKF2 缺数据、PX4 拒绝解锁。** 同步到 PX4 worlds 目录。
+- `~/.simulation-gazebo/models/x500`：原空占位目录换成指向真 x500 的软链接；自定义模型也拷进 `PX4-Autopilot/Tools/simulation/gz/models/`。修 `model://x500` include 解析失败（base_link 缺失）。
+- `adapters/px4_adapter.py`：`_ARRIVE_DIST` 2.5→0.5（fly_to 到位精度，之前"向东5米"只飞到 2.6m）。近目标最低速 0.4→0.3。
+- `brain/agent_loop.py`：坐标系提示词重写（NED 一致 + `fly_relative` 是机体坐标随航向变 + `down≤-8` 安全高度）；修 `{GROUND_Z}` 字面占位符 bug（system_prompt 未 .format）。
+- `brain/agent_loop.py` + `server.py`：`action = output.get("action") or {}`（DeepSeek 返回 `action:null` 时 NoneType 崩溃防护）。
+
+#### D. LLM / AI 行为（细节见同日"修复 AI 模式无响应链路"条目）
+- `config.py`：deepseek 模型 `deepseek-chat` → `deepseek-v4-pro`/`v4-flash`（本服务只接受 v4 系列模型名）；新增 `glm` provider（`ollama.com/v1`，`glm-5.2`）。
+- `llm_client.py`：网络重试 3 次 + temperature 400 重试。
+- `brain/agent_loop.py`：`on_error` 回调（LLM 失败推前端，不再假死）、`max_tokens` 500→4000、纯移动指令终止识别、思考占位卡片。
+- `skills/gimbal_skill.py`：`point` action 支持 `zoom_steps`（转向+变焦复合指令一步完成）。
+
+#### E. 文档
+- 新增 `DEPLOY_GUIDE_UV_CN.md`：本机保姆级部署指南（含全部踩坑+修复+排障速查）。
+
+### 二、系统环境要求（实机迁移前确认）
+
+| 项 | 要求 | 说明 |
+|---|---|---|
+| OS | Ubuntu 22.04 (jammy)，内核 6.8 | 官方支持 |
+| Python | **3.10** | gz apt 绑定是 `cpython-310` 编译的 .so，只能 3.10 导入；uv 环境 `--python 3.10 --system-site-packages --seed` |
+| Gazebo | gz Harmonic (gz sim 8.x) | 项目要求 8.x；本机同时装了 Garden(7)+Harmonic(8)，默认解析到 Harmonic，勿动 |
+| PX4 | 项目设计 **v1.15.4**；本机用 main(v1.17-alpha1) | main 多处不兼容（SDF frame 严格、rcS、gz 插件路径）已逐个绕过；**实机建议飞控固件统一 v1.15.4** |
+| ROS2 | humble | 仅云台桥接/真机 photo_function 需要；纯仿真飞行不用 ROS |
+| GPU | 混合显卡需 PRIME offload 到 NVIDIA 独显 | 仿真传感器渲染必需；实机伴飞电脑若无 Gazebo 渲染则不需要 |
+| photo_function | 需 `colcon build` 生成 srv/msg | `/home/ubuntu/ifc_pro/install`；rclpy 桥接 + 技能都依赖 |
+| protobuf | `PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` | gz+mavsdk 同进程共存必需 |
+| MAVSDK | pip mavsdk（已装 v3.17） | 仿真连 `udp://:14540`；实机连飞控串口/数传 |
+
+### 三、实机迁移待确认/完善点
+
+1. **PX4 版本对齐**：项目针对 v1.15.4，本机用 main 绕过多处。实机飞控固件建议统一 v1.15.4，避免 main 的 SDF/rcS/插件差异；若用 main，必须带上本会话的 start_sim/世界/模型修复（尤其 `GZ_SIM_SYSTEM_PLUGIN_PATH`）。
+2. **飞控连接**：实机改 `PX4_MAVSDK_URL`（`server.py:296` 读，默认 `udp://:14540`）→ 串口 `serial:///dev/ttyAMA0:921600` 或数传/WiFi。先手动验证 arm/takeoff/land 经 API 跑通。
+3. **云台真机**：仿真用 `ros2/gimbal_sim_bridge.py`；真机换真实 `photo_function`（a8_mini 后端连 SIYI A8 Mini 实物）。`gimbal_control` 技能代码不变（同 ROS 服务 API）。需确认：SIYI 实物 IP/端口、`manual_zoom` 真机是**连续变焦**（仿真每步 0.5x，语义有差异，真机需 `zoom_stop` 停）、`set_angle` 限位与仿真一致。
+4. **VLM 视觉**：现 VLM 走 deepseek-v4-flash（纯文本，无视觉）。实机若要"观察/扫描/拍照分析"语言指令，需加真视觉模型（Ollama `qwen2.5-vl` 或云端 vision API），否则这类指令会报错。
+5. **LLM 渠道稳定性**：deepseek 本机网络抖动严重（30s 超时/断连交替）；glm-5.2 token 与 Claude Code 会话共享、可能过期。实机伴飞电脑需稳定联网或本地 ollama；建议配多渠道 + `ACTIVE_PROVIDER` 可切。
+6. **传感器替换**：仿真靠 gz 传感器桥接（`gz_sensor_bridge.py`）；实机靠飞控真实 IMU/GPS/mag + 真实相机（用 OpenCV 抓图替换 gz 桥接）。`fly_to_ned` 用 GPS NED，真实 GPS 误差 ±2-3m（仿真 cm 级），"固定距离飞行"会有米级偏差，要更准需 RTK 或光流。
+7. **安全护栏（实机必做）**：RC 手动接管全程、飞控侧地理围栏 + failsafe、`_MAX_ALT` 按场地调小、离地高度限制、先系绳/空旷试飞。LLM 决策护栏（skill 层检查 GPS fix / 解锁状态 / 单次位移上限）**待加**。
+8. **RTL/降落**：PX4 main 仿真中 RTL 回 home 后不自动着陆（转 HOLD 悬停）；仿真侧曾加 `return_to_launch` 强制 land 但**本会话末已应用户要求回退**，当前为原样。实机需确认 `RTL_LAND_FINAL` 参数或保留强制 land 逻辑。
+9. **mavsdk_server 自愈**：已加 `_run_telem` 捕获断连重连（~8s 自愈），但重连窗口内技能可能失败需重试；实机数传断连更频繁，需重点验证。
+10. **起飞重量**：仿真云台 0.11kg 不影响起飞；实机 SIYI A8 Mini 重量需计入无人机总重，确认推力余量。
+11. **未提交**：以上改动多为工作区未提交状态（`git status` 可见），迁移前需决定提交/打包策略，避免遗漏 `start_sim.sh`/`sim_quickstart.sh`/`config.py`/`agent_loop.py`/`server.py`/`px4_adapter.py`/`gz_sensor_bridge.py`/模型 SDF/世界 SDF 等关键修改。
+
+---
+
 ## 2026-07-25 — 修复 AI 模式"无响应"链路 + 切换 LLM 渠道 + mavsdk_server 自愈
 
 ### 起因
@@ -119,3 +186,65 @@
 - `config` 加载验证：`ACTIVE_PROVIDER=glm`，planner 解析到 `glm-5.2 @ ollama.com/v1`。
 - 全部改动文件 `ast.parse` 语法通过。
 - mavsdk_server 自愈：依赖 server 重启后实测（待用户重启验证）。
+
+
+一、立刻要做的（在 NX 上）
+
+  1. 把代码和配置弄到 NX 上
+
+  仓库可以 git clone，但有两个文件 gitignore 了、不会跟过去，必须手动拷：
+  - .env（环境变量）
+  - .aerialclaw_llm_config.json（含 glm token，没有它 planner 直接 401）
+
+  从开发机拷到 NX（在你 NoMachine 的 NX 终端里，或用 scp）：
+  # 在开发机上，把这两个文件传到 NX
+  scp .env .aerialclaw_llm_config.json <nx用户>@<nx的ip>:~/AerialClaw/
+
+  2. 确认硬件 + 软件状态（跑这几条，结果贴给我）
+
+  ls -l /dev/ttyACM* /dev/ttyTHS* /dev/ttyUSB* 2>/dev/null     # 飞控/相机串口
+  ls /opt/ros/humble/setup.bash 2>/dev/null && echo "ROS2 OK"  # ROS2
+  ls ~/ifc_pro/install/setup.bash 2>/dev/null                  # photo_function 真机节点
+  ls ~/AerialClaw/server.py 2>/dev/null                        # AerialClaw 代码
+  ip addr | grep -E "192.168.144|usb"                          # SIYI 相机网口
+
+二、三个集成点
+
+  ① 飞控 PX4 —— 改连接串即可，代码不动
+  ```
+  # 在 NX 的 .env 或启动环境里
+  export SIM_ADAPTER=px4
+  export PX4_MAVSDK_URL=serial:///dev/ttyACM0:57600   # 端口/波特率按你的接线改
+  # 串口权限：
+  sudo usermod -aG dialout $USER   # 加完重新登录
+  MAVSDK 的 mavsdk_server 支持串口连接，px4_adapter 只是把 PX4_MAVSDK_URL 透传给 System.connect()，不用改代码。
+  ```
+
+  ② 云台 SIYI A8 Mini —— 跑真 photo_function 节点，技能不变
+  ```
+  # 在 NX 上启动真实 photo_function（替代仿真用的 gimbal_sim_bridge.py）
+  source /opt/ros/humble/setup.bash
+  source ~/ifc_pro/install/setup.bash
+  ros2 run <photo_function 的可执行名> ...   # 按 ifc_pro 的说明起
+  ```
+  gimbal_skill.py 走的是 /common/camera/* ROS2 服务，真机节点和仿真桥接用的是同一套 API，技能代码完全不用改。
+
+  ③ 相机画面可视化 —— 这是缺口，要补代码
+  gz_sensor_bridge 是 Gazebo 专用，真机上没有。前端 sensor_cameras（含云台画面）会没源。两个选择：
+  - (a) 写一个真机相机桥：读 SIYI A8 Mini 的视频流（RTSP 或 photo_function 发布的 ROS2 image topic）→ JPEG → emit
+  sensor_cameras。我可以帮你写，但需要先知道 SIYI 相机的输出方式（RTSP 地址？还是 ROS2 image topic？）。
+  - (b) 先不要可视化：飞控 + 云台控制 + LLM agent 照常工作，只是 UI 看不到画面。先跑通飞控再说。
+
+  三、安全（真桨，必须先做）
+
+  软件能自主发 takeoff/fly_to，真机一旦失控伤人。起飞前：
+  - 硬件 kill switch：RC 上绑一个通道做 PX4 flight termination / kill，独立于软件，软件挂了也能切断。
+  - failsafe：PX4 里设好信号丢失/低电量 → RTH 或 Land。      1 new message (ctrl+End) ↓ 
+  - 先拆桨：第一次 arm/disarm、电机响应测试都拆桨做。
+  - 第一次飞行低空短悬，确认 agent 的 stop_execution → hover/land 真能停住。
+
+  我需要你提供两样东西才能继续
+
+  1. 上面"二"里那几条硬件/软件检查命令的输出。
+  2. SIYI A8 Mini 相机的视频输出方式：是 RTSP 流（地址？）、还是 photo_function 真机节点会发布 ROS2 image topic（topic
+  名？）、还是别的。这决定相机桥怎么写。 
