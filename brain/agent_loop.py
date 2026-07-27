@@ -65,6 +65,18 @@ decision 含义:
 **不要自作主张**地开始搜索、巡检、标记等复杂行动! 除非操作员明确要求。
 简单指令 = 飞过去 + 看看 + 问操作员。复杂任务 = 操作员明确说了搜索/巡检/巡逻等。
 
+重要 — 纯移动指令的终止识别 (最容易犯的错!):
+纯移动指令 = 只要求飞一段距离/方位, 不含观察/搜索/巡检 (如"向前飞20米"、"向左飞20米"、
+"向东飞30米"、"升高10米"、"飞到坐标[x,y,z]")。这类指令的处理:
+1. (若不在空中) takeoff → 2. 执行一次对应移动技能 (fly_relative/fly_to/change_altitude) → 3. 立刻 done!
+⚠️ 移动技能返回成功 = 指令已达成, 马上判 done! 不要再飞第二次、不要 observe、不要 ask_user、不要 hover!
+⚠️ fly_relative(right=-20) 已经把你向左移了20米, 再调一次就是再移20米=总共40米, 严重超调!
+   一次移动达标就 done, summary 写明执行了什么移动、位移多少。
+⚠️ "向左/向右/向前/向后飞N米"是相对当前朝向的【一次性】位移, 用一次 fly_relative 即可,
+   绝不要拆成多次连续 fly_relative (朝向会漂, 多次 = 乱晃+超调)。
+⚠️ 若指令带绝对方位(东/西/南/北)或明确坐标, 用 fly_to 一次到达即 done。
+判断"纯移动"vs"复杂": 指令里有没有"看/搜/巡/找/拍/侦察"等动词? 没有 = 纯移动 = 一步done。
+
 重要 — 什么时候判 done:
 - 核心目标完成即可判 done (如: 所有巡检点观察完毕 + 到达汇报点 → report 汇总 → 立刻 done)
 - 到达最终目标点后, 只需要执行一次 report(汇总所有发现) → 直接判 done! 不要再 observe/fly_to!
@@ -91,32 +103,39 @@ decision 含义:
 - 不要编造传感器数据
 - robot 永远是 UAV_1
 
-⚠️ 坐标系说明 — AirSim 世界坐标:
-本系统直接使用 AirSim 世界坐标 [x, y, z]:
-- x: 北方向（正=北，负=南）
-- y: 东方向（正=东，负=西）
-- z: 高度（z 越负越高！地面 z ≈ {GROUND_Z}）
+⚠️ 坐标系说明 — NED 世界坐标:
+本系统使用 NED 世界坐标 [north, east, down]（即 [x, y, z]）:
+- north (x): 北方向（正=北，负=南），单位米
+- east  (y): 东方向（正=东，负=西），单位米
+- down  (z): 向下为正！高度 = -down。地面 down≈0，离地 H 米 → down = -H
 
-高度理解：
-  z = {GROUND_Z} → 地面（约-13）
-  z = {GROUND_Z} - 30 → 离地 30m（约-43）
-  z = {GROUND_Z} - 100 → 离地 100m（约-113）
+高度理解（地面 down≈0）:
+  down = 0    → 地面
+  down = -10   → 离地 10m
+  down = -30   → 离地 30m
+  ⚠️ down 接近 0 或正值 = 撞地！down 必须是负值才在空中。
 
-各技能用法:
-- fly_to: target_position=[x, y, z]，直接是世界坐标。z={GROUND_Z}-30 表示离地约30m
+各移动技能用法:
+- fly_to: target_position=[north, east, down]，绝对 NED 世界坐标。东南西北等绝对方位一律用 fly_to。
+  例: 从当前位置向东 5 米 → target_position=[当前north, 当前east+5, 当前down]
+  例: 离地 15m → target_position=[north, east, -15]
+- fly_relative: forward/right/up，机体坐标系（相对无人机当前朝向，会随航向变化！）
+  - forward=前、right=右、up=上(正)/下(负)
+  - ⚠️ right ≠ 东！航向一漂，right 可能变成南/西/北。只有"沿当前朝向"移动时才用 fly_relative。
+  - 想去东南西北等绝对方位 → 用 fly_to，不要用 fly_relative。
 - change_altitude: delta参数，正数=升高，负数=下降。delta=20 从当前升高20m
-- fly_relative: forward/right/up 参数，相对当前朝向
 - takeoff: altitude 正数，表示从当前位置往上飞多少米
-- get_position 返回 [x, y, z] 世界坐标，altitude 字段是离地高度（正数）
+- get_position 返回 [north, east, down]，altitude 字段是离地高度（正数，米）
 
 ⚠️ 最常见的错误:
-- z 给了正值或接近0的值 → 会撞地！z 必须比地面 z 更负!
-- 想飞到30m高 → z = {GROUND_Z} - 30，不是 z = -30!
-- 不知道 GROUND_Z？先 get_position，查看 ground_z 字段!
+- down 给了正值或接近 0 → 撞地！飞行中 down 必须 ≤ -8（保持 ≥8m 离地高度）。
+- 想飞到 15m 高 → down=-15，不是 down=-1.5 或 down=15。
+- 用 fly_relative(right=5) 表达"向东 5 米" → 错！东是绝对方位，要用 fly_to(east=当前east+5)。
+- 不确定当前位置/高度 → 先 get_position。
 
 ⚠️ 飞行黄金法则 — 先感知再行动:
 1. 飞往任何位置之前, 必须先 get_position 了解当前位置和高度
-2. fly_to 需要你给完整的 [north, east, down], down 必须是负值(高度)!
+2. fly_to 需要你给完整的 [north, east, down], down 必须 ≤ -8 (≥8m 离地, 防撞地)!
 3. 不确定安全高度? 先 perceive 看前方, 或保持当前高度
 4. 遇到障碍? 先 change_altitude 升高, 或 fly_relative 绕行
 5. 绝对不要盲飞! 每次移动前都要有信息支撑
@@ -332,6 +351,7 @@ class AgentLoop:
         on_action=None,      # callback(iteration, skill, params, result)
         on_complete=None,    # callback(success, summary)
         on_stream=None,      # callback(token_str) — LLM streaming 回调
+        on_error=None,       # callback(msg: str) — LLM 调用/解析失败时回调, 用于把"正在重试/失败原因"推到前端, 避免静默假死
         stop_event=None,     # threading.Event, 设置后停止
         experience_store=None,  # VectorStore 实例，用于检索相似经验
     ):
@@ -346,6 +366,7 @@ class AgentLoop:
         self.on_action = on_action or (lambda *a: None)
         self.on_stream = on_stream or (lambda *a: None)
         self.on_complete = on_complete or (lambda *a: None)
+        self.on_error = on_error or (lambda *a: None)
         self.stop_event = stop_event
         self.experience_store = experience_store  # VectorStore 实例
 
@@ -500,7 +521,7 @@ class AgentLoop:
                         tactic_raw = self.llm.chat([
                             {"role": "system", "content": "你是无人机战术规划师, 专注于生成高效的多步骤执行方案。"},
                             {"role": "user", "content": tactic_prompt},
-                        ], temperature=0.5, max_tokens=300)
+                        ], temperature=0.5, max_tokens=800)
                         if tactic_raw:
                             self.runtime_tactic = tactic_raw.strip()
                             logger.info(f"[AgentLoop] 战术方案已生成: {self.runtime_tactic[:80]}...")
@@ -518,13 +539,21 @@ class AgentLoop:
                 user_prompt += f"\n\n## 操作员实时指令 (优先级最高!)\n{user_msgs}\n请根据操作员指令调整你的行动计划。"
                 self._user_messages.clear()  # 消费后清空
 
+            # 调用 LLM 前先给前端一个"思考中"占位, 避免调用期间(可能数十秒)前端
+            # 无任何反馈、像卡死。LLM 返回后 on_thinking 会用真实结果覆盖同轮卡片。
+            self.on_thinking(self.iteration, {"thinking": "思考中...", "decision": "pending"})
+
             try:
+                # max_tokens 给 4000: glm-5.2 / deepseek-v4 等推理模型会先在 reasoning
+                # 字段消耗大量 token, 500 不够写完一个完整 JSON 会被 length 截断 → 解析失败。
                 raw = self.llm.chat([
                     {"role": "system", "content": effective_system},
                     {"role": "user", "content": user_prompt},
-                ], temperature=0.5, max_tokens=500, on_chunk=self.on_stream)
+                ], temperature=0.5, max_tokens=4000, on_chunk=self.on_stream)
             except Exception as e:
                 logger.error(f"[AgentLoop] LLM 失败: {e}")
+                # 把失败原因推到前端, 否则用户只看到"启动 Agent 自主循环..."后干等, 像无响应
+                self.on_error(f"LLM 调用失败, 2秒后重试: {e}")
                 time.sleep(2)
                 continue
 
@@ -536,6 +565,7 @@ class AgentLoop:
                     self._parse_fail_count,
                     (raw or "")[:300],
                 )
+                self.on_error(f"LLM 输出无法解析 ({self._parse_fail_count}/3), 重试中...")
                 if self._parse_fail_count >= 3:
                     msg = "任务中止：LLM 连续输出无法解析，未能生成可执行决策。"
                     logger.error(f"[AgentLoop] 连续 {self._parse_fail_count} 次解析失败，任务失败结束")
@@ -549,7 +579,7 @@ class AgentLoop:
 
             thinking = output.get("thinking", "")
             decision = output.get("decision", "act")
-            action = output.get("action", {})
+            action = output.get("action") or {}
             reflection = output.get("reflection")
             progress = output.get("goal_progress", "")
 
@@ -666,7 +696,7 @@ class AgentLoop:
                 raw = self.llm.chat([
                     {"role": "system", "content": "你是一架无人机，任务已结束，需要安全返航。直接输出返航动作。"},
                     {"role": "user", "content": return_prompt},
-                ], temperature=0.3, max_tokens=300)
+                ], temperature=0.3, max_tokens=2000)
 
                 parsed = _parse_agent_output(raw)
                 if parsed and parsed.get("decision") == "act":

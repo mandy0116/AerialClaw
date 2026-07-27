@@ -121,6 +121,24 @@ fi
 export PX4_GZ_MODELS="$PX4_MODELS"
 export PX4_GZ_WORLDS="$PX4_WORLDS"
 export GZ_SIM_RESOURCE_PATH="${LOCAL_MODELS}:${PX4_MODELS}:${PX4_WORLDS}:${GZ_SIM_RESOURCE_PATH:-}"
+
+# PX4 custom gz plugins (MotorFailurePlugin, AirSpeedPlugin, GenericMotorModel, ...).
+# Without this, gz sim (Ruby CLI embedding the gz-sim8 server) segfaults when the
+# x500 model references MotorFailurePlugin and the lib can't be found — which kills
+# gz and makes PX4 rcS fail. Mirrors PX4's build/.../rootfs/gz_env.sh.
+export PX4_GZ_PLUGINS="${PX4_DIR}/build/px4_sitl_default/src/modules/simulation/gz_plugins"
+export GZ_SIM_SYSTEM_PLUGIN_PATH="${PX4_GZ_PLUGINS}:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
+
+# AerialClaw hybrid-GPU fix: on Optimus/PRIME laptops (e.g. AMD iGPU display +
+# NVIDIA dGPU), gz sensor rendering (cameras/gpu_lidar) falls back to Mesa EGL on
+# the display GPU and fails with "egl: failed to create dri2 screen", producing
+# camera topics with zero frames. Force rendering onto the NVIDIA dGPU via PRIME
+# offload. Override by exporting GZ_FORCE_NVIDIA_OFFLOAD=0 before running.
+if [ "${GZ_FORCE_NVIDIA_OFFLOAD:-1}" = "1" ]; then
+  export __NV_PRIME_RENDER_OFFLOAD=1
+  export __GLX_VENDOR_LIBRARY_NAME=nvidia
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+fi
 export PX4_SYS_AUTOSTART=4001
 export PX4_SIMULATOR=gz
 export PX4_GZ_WORLD="$WORLD"

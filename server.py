@@ -143,6 +143,7 @@ def _build_robot_registry(robot_id: str, robot_type: str):
         RunPython, HttpRequest, ReadFile, WriteFile,
         Report, Alert, AskUser, UpdateMap,
     )
+    from skills.gimbal_skill import GimbalControl
 
     # 全量技能工厂（每次都 new 出新实例，避免共享状态）
     ALL_SKILL_FACTORIES = [
@@ -155,6 +156,8 @@ def _build_robot_registry(robot_id: str, robot_type: str):
         RunPython, HttpRequest, ReadFile, WriteFile,
         # 通信技能（主动交互）
         Report, Alert, AskUser, UpdateMap,
+        # 云台控制（通过 photo_function ROS 服务，仿真走桥接节点）
+        GimbalControl,
     ]
 
     reg = SkillRegistry(auto_generate_doc=False)
@@ -742,7 +745,7 @@ def _start_sensor_stream():
     import cv2
     import math
 
-    DIRECTIONS = ["front", "rear", "left", "right", "down"]
+    DIRECTIONS = ["front", "rear", "left", "right", "down", "gimbal"]
 
     def _stream_loop():
         while state.initialized and state.sensor_bridge and state.sensor_bridge.is_running:
@@ -1860,7 +1863,7 @@ def on_ai_task(data):
                     output = {}
                 thinking = output.get("thinking", "")
                 decision = output.get("decision", "")
-                action = output.get("action", {})
+                action = output.get("action") or {}
                 progress = output.get("goal_progress", "")
                 reflection = output.get("reflection")
                 # 新事件：结构化思考链，前端展示每轮卡片
@@ -1915,6 +1918,11 @@ def on_ai_task(data):
             def _on_stream(token):
                 pass  # 不再推送碎片 JSON token
 
+            def _on_error(msg):
+                # LLM 调用/解析失败时实时告知前端, 避免静默重试造成"假死无响应"
+                state.push_log("warn", f"⚠️ {msg}")
+                socketio.emit("ai_thinking", {"phase": "error", "detail": msg})
+
             loop = AgentLoop(
                 goal=task,
                 llm_client=client,
@@ -1926,6 +1934,7 @@ def on_ai_task(data):
                 on_action=on_action,
                 on_complete=on_complete,
                 on_stream=_on_stream,
+                on_error=_on_error,
                 stop_event=state._ai_stop_event,
                 experience_store=getattr(state, "experience_store", None),
             )
@@ -2290,6 +2299,10 @@ def _run_agent_loop(goal, sid):
                 "message": goal,
             }, to=sid)
 
+        def on_error(msg):
+            state.push_log("warn", f"⚠️ {msg}")
+            socketio.emit("ai_thinking", {"phase": "error", "detail": msg})
+
         loop = AgentLoop(
             goal=goal,
             llm_client=client,
@@ -2301,6 +2314,7 @@ def _run_agent_loop(goal, sid):
             on_action=on_action,
             on_complete=on_complete,
             on_stream=lambda token: socketio.emit("ai_stream", {"token": token, "done": False}),
+            on_error=on_error,
             stop_event=state._ai_stop_event,
             experience_store=getattr(state, "experience_store", None),
         )

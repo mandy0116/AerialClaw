@@ -3,7 +3,7 @@
   <model name='x500_lidar_2d_cam'>
     <!-- 基础 x500 无人机 -->
     <include merge='true'>
-      <uri>x500</uri>
+      <uri>model://x500</uri>
     </include>
 
     <!-- ═══════════════════════════════════════════════════════════
@@ -218,6 +218,95 @@
       <parent>base_link</parent>
       <child>cam_down_link</child>
     </joint>
+
+    <!-- ═══════════════════════════════════════════════════════════
+         云台 (pan/tilt + 可变焦相机) — 仿 SIYI A8 Mini
+         pan:  yaw 关节 (轴 z, ±120°)   tilt: pitch 关节 (轴 y, -80°~+30°)
+         JointPositionController 订阅 gz.msgs.Double:
+           gimbal/yaw_cmd    (data = yaw 角度, 弧度)
+           gimbal/pitch_cmd   (data = pitch 角度, 弧度)
+         变焦靠数字裁剪 (gz_sensor_bridge 订阅 /gimbal/zoom_level)
+         ═══════════════════════════════════════════════════════════ -->
+    <link name="gimbal_yaw_link">
+      <pose relative_to="base_link">0.10 0 -0.06 0 0 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="gimbal_yaw_vis">
+        <geometry><box><size>0.03 0.03 0.02</size></box></geometry>
+        <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="gimbal_yaw_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>gimbal_yaw_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit><lower>-2.0944</lower><upper>2.0944</upper></limit>
+        <dynamics><damping>1.5</damping><friction>0.02</friction></dynamics>
+      </axis>
+    </joint>
+
+    <link name="gimbal_pitch_link">
+      <pose relative_to="gimbal_yaw_link">0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.04</mass>
+        <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="gimbal_pitch_vis">
+        <geometry><box><size>0.025 0.025 0.02</size></box></geometry>
+        <material><ambient>0.15 0.15 0.15 1</ambient><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="gimbal_pitch_joint" type="revolute">
+      <parent>gimbal_yaw_link</parent>
+      <child>gimbal_pitch_link</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit><lower>-1.3963</lower><upper>0.5236</upper></limit>
+        <dynamics><damping>1.5</damping><friction>0.02</friction></dynamics>
+      </axis>
+    </joint>
+
+    <link name="gimbal_cam_link">
+      <pose relative_to="gimbal_pitch_link">0.02 0 0 0 0 0</pose>
+      <inertial>
+        <mass>0.02</mass>
+        <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+      </inertial>
+      <visual name="gimbal_cam_vis">
+        <geometry><box><size>0.02 0.03 0.02</size></box></geometry>
+        <material><ambient>0.05 0.05 0.05 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse></material>
+      </visual>
+      <sensor name="gimbal_cam" type="camera">
+        <camera>
+          <horizontal_fov>1.3962634</horizontal_fov>
+          <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+          <clip><near>0.1</near><far>100</far></clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <visualize>false</visualize>
+      </sensor>
+    </link>
+    <joint name="gimbal_cam_joint" type="fixed">
+      <parent>gimbal_pitch_link</parent>
+      <child>gimbal_cam_link</child>
+    </joint>
+
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_yaw_joint</joint_name>
+      <topic>gimbal/yaw_cmd</topic>
+      <p_gain>3</p_gain><i_gain>0.2</i_gain><d_gain>0.5</d_gain>
+      <i_max>1</i_max><i_min>-1</i_min><cmd_max>1000</cmd_max><cmd_min>-1000</cmd_min>
+    </plugin>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>gimbal_pitch_joint</joint_name>
+      <topic>gimbal/pitch_cmd</topic>
+      <p_gain>3</p_gain><i_gain>0.2</i_gain><d_gain>0.5</d_gain>
+      <i_max>1</i_max><i_min>-1</i_min><cmd_max>1000</cmd_max><cmd_min>-1000</cmd_min>
+    </plugin>
 
   </model>
 </sdf>

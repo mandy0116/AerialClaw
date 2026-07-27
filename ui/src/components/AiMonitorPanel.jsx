@@ -327,6 +327,7 @@ const CAM_DIRECTIONS = [
   { key: 'right', label: '▶ RIGHT', cockpit: 'right' },
   { key: 'rear',  label: '▼ REAR',  cockpit: 'rear' },
   { key: 'down',  label: '⊙ DOWN',  cockpit: 'down' },
+  { key: 'gimbal', label: '◎ GIMBAL', cockpit: 'gimbal' },
 ]
 
 /* ── 主面板 ──────────────────────────────────────────────── */

@@ -12,7 +12,7 @@ from adapters.sim_adapter import (
 )
 
 logger = logging.getLogger(__name__)
-_MIN_ALT, _MAX_ALT, _ARRIVE_DIST = 2.0, 200.0, 2.5
+_MIN_ALT, _MAX_ALT, _ARRIVE_DIST = 2.0, 200.0, 0.5
 
 
 class PX4Adapter(SimAdapter):
@@ -77,7 +77,22 @@ class PX4Adapter(SimAdapter):
         try: await s.telemetry.set_rate_position_velocity_ned(10.)
         except: pass
         for fn in [self._t_pv,self._t_gps,self._t_hdg,self._t_bat,self._t_mode,self._t_arm,self._t_air]:
-            asyncio.ensure_future(fn(s))
+            asyncio.ensure_future(self._run_telem(fn(s), fn.__name__))
+
+    async def _run_telem(self, coro, name):
+        """跑一个遥测流, 断开时把 _connected 置 False 让 server 的重连循环能感知。
+
+        mavsdk_server 崩溃时这些 async-for 会抛 AioRpcError(UNAVAILABLE / Stream removed),
+        原来没有捕获 → 异常被 asyncio 默默吞掉, _connected 一直 True, 重连永不触发。
+        """
+        try:
+            await coro
+        except Exception as e:
+            if self._connected:
+                logger.warning(
+                    f"[PX4Adapter] 遥测流 {name} 断开: {e} — mavsdk_server 可能已崩溃, "
+                    f"标记断开, 等待 server 遥测循环重连")
+            self._connected = False
 
     async def _t_pv(self,s):
         async for pv in s.telemetry.position_velocity_ned():
@@ -224,7 +239,7 @@ class PX4Adapter(SimAdapter):
                     if d3 < _ARRIVE_DIST:
                         self._ra(self._vel_cmd(0,0,0,self._hdg))
                         return ActionResult(True, f"Arrived (err={d3:.2f}m)")
-                    vh = speed if hd > 15. else max(speed*(hd/15.), 0.4)
+                    vh = speed if hd > 15. else max(speed*(hd/15.), 0.3)
                     vn = vh*(dn/hd) if hd > 0.3 else 0.
                     ve = vh*(de/hd) if hd > 0.3 else 0.
                     vd = max(min(dd*0.5, 3.), -3.)

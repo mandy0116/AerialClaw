@@ -13,6 +13,7 @@ const CAM_LABELS = {
   left:  '◀ 左',
   right: '▶ 右',
   down:  '⊙ 下',
+  gimbal: '◎ 云台',
 }
 
 // ── 单个摄像头视图 ─────────────────────────────────────────────────────────
@@ -61,10 +62,10 @@ function CameraCell({ data, label }) {
 
 function CameraGrid({ sensorCameras, onClickCamera }) {
   // 布局: front | down  | rear
-  //        left  | right
+  //        left  | right | gimbal
   const layout = [
     ['front', 'down', 'rear'],
-    ['left', 'right'],
+    ['left', 'right', 'gimbal'],
   ]
 
   return (

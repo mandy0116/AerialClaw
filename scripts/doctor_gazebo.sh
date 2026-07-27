@@ -15,6 +15,10 @@
 
 set -uo pipefail
 
+# AerialClaw: force pure-Python protobuf so apt gz bindings (old protoc) and pip
+# mavsdk (new protobuf) coexist. See scripts/sim_quickstart.sh for details.
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PX4_DIR="${PX4_DIR:-${PROJECT_DIR}/PX4-Autopilot}"

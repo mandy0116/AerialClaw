@@ -26,9 +26,26 @@ from __future__ import annotations
 
 import json
 import re
+import time
+import socket
+import http.client
+import logging
 import urllib.request
 import urllib.error
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# 网络层异常: 这些情况下重试有意义 (瞬时抖动, 而非配置错误)
+_NETWORK_EXC = (
+    urllib.error.URLError,   # 含 socket.timeout (Python 3.10+)
+    socket.timeout,
+    http.client.HTTPException,  # RemoteDisconnected / IncompleteRead / BadStatusLine
+    ConnectionError,
+    TimeoutError,
+)
+_MAX_NET_RETRIES = 3        # 网络层最多重试次数
+_NET_RETRY_DELAY = 1.5     # 重试间隔 (秒)
 
 
 def _strip_thinking(text: str) -> str:
@@ -149,28 +166,30 @@ class LLMClient:
         """
         url = f"{self._base_url}/chat/completions"
 
-        payload: dict = {
-            "model":       self._model,
-            "messages":    messages,
-            "stream":      True,   # 流式，避免推理模型超时断连
-            "temperature": temperature,
-            **kwargs,
-        }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        def _build_payload(temp: float | None) -> dict:
+            payload: dict = {
+                "model":    self._model,
+                "messages": messages,
+                "stream":   True,   # 流式，避免推理模型超时断连
+            }
+            if temp is not None:
+                payload["temperature"] = temp
+            payload.update(kwargs)
+            if max_tokens is not None:
+                payload["max_tokens"] = max_tokens
+            return payload
 
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type":  "application/json",
-                "Authorization": f"Bearer {self._api_key}",
-            },
-            method="POST",
-        )
-
-        try:
+        def _stream_once(temp: float | None) -> str:
+            payload = _build_payload(temp)
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type":  "application/json",
+                    "Authorization": f"Bearer {self._api_key}",
+                },
+                method="POST",
+            )
             chunks: list[str] = []
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 for raw_line in resp:
@@ -190,22 +209,54 @@ class LLMClient:
                                 on_chunk(content)
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+            return _strip_thinking("".join(chunks).strip())
 
-            full_text = "".join(chunks).strip()
-            # 过滤掉推理模型的 <think>...</think> 块，只保留最终回复
-            full_text = _strip_thinking(full_text)
-            return full_text
+        def _stream_with_net_retry(temp: float | None) -> str:
+            # 网络层重试: deepseek 等云端渠道常因瞬时抖动超时/断连, 重试 3 次
+            # 比单次长超时再抛给上层更可靠 (3 次里通常有 1 次能连上)。
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_NET_RETRIES):
+                try:
+                    return _stream_once(temp)
+                except urllib.error.HTTPError:
+                    raise  # HTTP 错误交给上层 temperature 重试 / 友好报错处理
+                except _NETWORK_EXC as e:
+                    last_exc = e
+                    if attempt < _MAX_NET_RETRIES - 1:
+                        logger.warning(
+                            "[LLMClient] 网络异常 (第%d/%d次), %.1fs 后重试: %s",
+                            attempt + 1, _MAX_NET_RETRIES, _NET_RETRY_DELAY, e,
+                        )
+                        time.sleep(_NET_RETRY_DELAY)
+            raise last_exc  # type: ignore[misc]
 
+        try:
+            try:
+                return _stream_with_net_retry(temperature)
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", errors="replace")
+                # 推理模型 (如 DeepSeek v4-pro / v4-flash) 不支持 temperature/top_p
+                # 等参数, 传了会 HTTP 400。去掉 temperature 重试一次再放弃。
+                if e.code == 400 and temperature is not None and "temperature" in body.lower():
+                    logger.warning(
+                        "[LLMClient] 模型拒绝 temperature 参数, 去掉后重试: %s",
+                        body[:200],
+                    )
+                    return _stream_with_net_retry(None)
+                raise LLMUserError(
+                    _friendly_http_error(e.code, body, self._model),
+                    detail=f"HTTP {e.code} from {url}: {body[:400]}",
+                ) from e
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             raise LLMUserError(
                 _friendly_http_error(e.code, body, self._model),
                 detail=f"HTTP {e.code} from {url}: {body[:400]}",
             ) from e
-        except urllib.error.URLError as e:
+        except _NETWORK_EXC as e:
             raise LLMUserError(
                 "无法连接模型服务：请检查 Base URL 是否正确、网络是否可达。",
-                detail=f"URLError from {url}: {e.reason}",
+                detail=f"网络异常 from {url}: {e}",
             ) from e
 
     def chat_with_tools(

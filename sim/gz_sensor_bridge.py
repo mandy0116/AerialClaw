@@ -34,7 +34,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-DIRECTIONS = ("front", "rear", "left", "right", "down")
+DIRECTIONS = ("front", "rear", "left", "right", "down", "gimbal")
 
 
 @dataclass
@@ -107,9 +107,11 @@ class GzSensorBridge:
         self._cameras: Dict[str, _CameraSlot] = {d: _CameraSlot() for d in self._camera_dirs}
         self._lidar = _LidarSlot()
         self._subscriptions: List[str] = []
+        self._gimbal_zoom = 1.0   # 数字变焦倍数，由 /gimbal/zoom_level 驱动
 
         self._ImageMsg = None
         self._LaserScanMsg = None
+        self._DoubleMsg = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -129,6 +131,7 @@ class GzSensorBridge:
             topics = self._list_topics()
             self._subscribe_cameras(topics)
             self._subscribe_lidar(topics)
+            self._subscribe_zoom()
         except Exception as exc:  # pragma: no cover - exercised on systems without Gazebo
             self.last_error = str(exc)
             logger.warning("Gazebo sensor bridge start failed: %s", exc, exc_info=True)
@@ -170,7 +173,22 @@ class GzSensorBridge:
         direction = self._normalize_direction(direction)
         with self._lock:
             slot = self._cameras.get(direction)
-            return None if slot is None or slot.image is None else slot.image.copy()
+            img = None if slot is None or slot.image is None else slot.image.copy()
+            zoom = self._gimbal_zoom if direction == "gimbal" else 1.0
+        if img is None or zoom <= 1.001:
+            return img
+        # 数字变焦：取中心 1/zoom 区域，放大回原尺寸
+        h, w = img.shape[:2]
+        crop_h = max(1, int(h / zoom))
+        crop_w = max(1, int(w / zoom))
+        top = (h - crop_h) // 2
+        left = (w - crop_w) // 2
+        cropped = img[top:top + crop_h, left:left + crop_w]
+        try:
+            import cv2
+            return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+        except Exception:
+            return cropped
 
     def get_camera_info(self, direction: str = "front") -> dict:
         direction = self._normalize_direction(direction)
@@ -250,6 +268,13 @@ class GzSensorBridge:
             except Exception:
                 continue
 
+        # Double (用于订阅云台变焦倍数 /gimbal/zoom_level) — 可选
+        try:
+            from gz.msgs10.double_pb2 import Double
+            self._DoubleMsg = Double
+        except ImportError:
+            logger.warning("gz.msgs10.double_pb2 unavailable, gimbal digital zoom disabled")
+
     def _list_topics(self) -> List[str]:
         # gz.transport Node APIs vary slightly by version. The explicit default
         # topics below are enough for AerialClaw's bundled model; listing topics
@@ -288,12 +313,20 @@ class GzSensorBridge:
 
     def _subscribe_cameras(self, topics: List[str]) -> None:
         for direction in self._camera_dirs:
-            expected = self.camera_topic_template.format(
-                world=self.world_name,
-                model=self.model_name,
-                direction=direction,
-            )
-            topic = self._choose_topic(topics, expected, [f"cam_{direction}", "/image"])
+            # 云台相机 topic 与其它 cam_<dir> 不同，单独处理
+            if direction == "gimbal":
+                expected = (
+                    f"/world/{self.world_name}/model/{self.model_name}"
+                    f"/link/gimbal_cam_link/sensor/gimbal_cam/image"
+                )
+                topic = self._choose_topic(topics, expected, ["gimbal_cam", "/image"])
+            else:
+                expected = self.camera_topic_template.format(
+                    world=self.world_name,
+                    model=self.model_name,
+                    direction=direction,
+                )
+                topic = self._choose_topic(topics, expected, [f"cam_{direction}", "/image"])
             if not topic:
                 continue
 
@@ -307,6 +340,24 @@ class GzSensorBridge:
                     self._subscriptions.append(topic)
             else:
                 logger.warning("Failed to subscribe camera topic: %s", topic)
+
+    def _subscribe_zoom(self) -> None:
+        """订阅 rclpy 桥接发布的 /gimbal/zoom_level (gz.msgs.Double)，驱动数字变焦。"""
+        if self._DoubleMsg is None:
+            return
+        topic = "/gimbal/zoom_level"
+
+        def _cb(msg):
+            z = float(getattr(msg, "data", 1.0))
+            if z > 0.0:
+                with self._lock:
+                    self._gimbal_zoom = z
+
+        ok = self._node.subscribe(self._DoubleMsg, topic, _cb)
+        if ok:
+            self._subscriptions.append(topic)
+        else:
+            logger.warning("Failed to subscribe gimbal zoom topic: %s", topic)
 
     def _subscribe_lidar(self, topics: List[str]) -> None:
         if self._LaserScanMsg is None:

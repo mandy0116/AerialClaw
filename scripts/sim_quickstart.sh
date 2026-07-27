@@ -20,8 +20,32 @@
 
 set -euo pipefail
 
+# AerialClaw: force pure-Python protobuf so apt-installed gz bindings (generated
+# with protoc <3.19) and pip mavsdk (requires protobuf>=6.32, builder API) can
+# coexist in the same process. The C++ impl rejects the old gz _pb2 files; the
+# pure-Python impl bypasses that descriptor check. Harmless if not needed.
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
+
+# AerialClaw hybrid-GPU fix: force gz rendering (server sensors + GUI) onto the
+# NVIDIA dGPU via PRIME offload. Needed on Optimus laptops (e.g. AMD iGPU display
+# + NVIDIA dGPU) where Mesa EGL on the display GPU fails with
+# "egl: failed to create dri2 screen" and camera/gpu_lidar topics get 0 frames.
+# Override with GZ_FORCE_NVIDIA_OFFLOAD=0.
+if [ "${GZ_FORCE_NVIDIA_OFFLOAD:-1}" = "1" ]; then
+  export __NV_PRIME_RENDER_OFFLOAD=1
+  export __GLX_VENDOR_LIBRARY_NAME=nvidia
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# PX4 custom gz plugins (MotorFailurePlugin etc.) — without this gz segfaults on
+# model load. Inherited by the GUI (gz sim -g) and start_sim.sh subprocess.
+PX4_GZ_PLUGINS_DIR="${PROJECT_DIR}/PX4-Autopilot/build/px4_sitl_default/src/modules/simulation/gz_plugins"
+if [ -d "$PX4_GZ_PLUGINS_DIR" ]; then
+  export GZ_SIM_SYSTEM_PLUGIN_PATH="${PX4_GZ_PLUGINS_DIR}:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
+fi
 
 SETUP=0
 RESTART=0

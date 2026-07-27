@@ -62,12 +62,15 @@ PROVIDERS: dict[str, dict] = {
         "timeout":       150,
     },
 
-    # DeepSeek
+    # DeepSeek (官方 V4 系列模型名: deepseek-v4-pro / deepseek-v4-flash)
+    # ⚠️ v4-pro 是重型推理模型, 推理链极长, 在本项目的 max_tokens 预算下 content
+    #    字段常为空 → AgentLoop 解析失败 → 前端假死。planner 用 v4-flash 更合适
+    #    (推理短、直接输出 content)。需要更强调用时可在界面 ⚙️ 切回 v4-pro。
     "deepseek": {
         "api_type":      "openai_compat",
-        "base_url":      "https://api.deepseek.com/v1",
+        "base_url":      _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
         "api_key":       _env("DEEPSEEK_API_KEY", ""),
-        "default_model": "deepseek-chat",
+        "default_model": _env("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "timeout":       60,
     },
 
@@ -87,6 +90,19 @@ PROVIDERS: dict[str, dict] = {
         "api_key":       _env("ZHIPU_API_KEY", ""),
         "default_model": "glm-4",
         "timeout":       60,
+    },
+
+    # GLM via ollama.com (OpenAI-compat 端点, 也兼容 Anthropic Messages API)
+    # 推理模型 glm-5.2, 输出在 content 字段, max_tokens>=500 能正常返回。
+    # 本机到该端点稳定且快 (~1-2s), 适合做 planner。
+    # ⚠️ api_key 用的是 ollama.com 的 Bearer token, 走与 Claude Code 同一账户额度,
+    #    若 token 为会话级可能过期, 失效时换回 deepseek 或本地 ollama。
+    "glm": {
+        "api_type":      "openai_compat",
+        "base_url":      _env("GLM_BASE_URL", "https://ollama.com/v1"),
+        "api_key":       _env("GLM_API_KEY", _env("ANTHROPIC_AUTH_TOKEN", "")),
+        "default_model": _env("GLM_MODEL", "glm-5.2"),
+        "timeout":       90,
     },
 
     # VLM - Vision Language Model (for image analysis)

@@ -94,7 +94,7 @@ export default function CockpitView({ socket, sensorCameras, sensorLidar, onClos
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') { sendStop(); onClose(); return; }
       // 数字键切换视角: 1=前 2=后 3=左 4=右 5=下
-      const viewMap = { '1': 'front', '2': 'rear', '3': 'left', '4': 'right', '5': 'down' };
+      const viewMap = { '1': 'front', '2': 'rear', '3': 'left', '4': 'right', '5': 'down', '6': 'gimbal' };
       if (viewMap[e.key]) { setActiveView(viewMap[e.key]); return; }
       const k = e.key === ' ' ? ' ' : e.key === 'Shift' ? 'shift' : e.key.toLowerCase();
       if (['w','a','s','d',' ','shift','q','e'].includes(k)) {
@@ -178,12 +178,13 @@ export default function CockpitView({ socket, sensorCameras, sensorLidar, onClos
   const leftImg = sensorCameras?.left?.image;
   const rightImg = sensorCameras?.right?.image;
   const downImg = sensorCameras?.down?.image;
+  const gimbalImg = sensorCameras?.gimbal?.image;
   const pos = telemetry.position || { north: 0, east: 0, down: 0 };
   const battPct = telemetry.battery != null ? Math.round(telemetry.battery) : '--';
 
   // 当前主画面
-  const viewImages = { front: frontImg, rear: rearImg, left: leftImg, right: rightImg, down: downImg };
-  const viewLabels = { front: '▲ FRONT', rear: '▼ REAR', left: '◀ LEFT', right: '▶ RIGHT', down: '⊙ DOWN' };
+  const viewImages = { front: frontImg, rear: rearImg, left: leftImg, right: rightImg, down: downImg, gimbal: gimbalImg };
+  const viewLabels = { front: '▲ FRONT', rear: '▼ REAR', left: '◀ LEFT', right: '▶ RIGHT', down: '⊙ DOWN', gimbal: '◎ GIMBAL' };
   const mainImg = viewImages[activeView];
 
   // PiP: 显示除当前视角外的其他4个
