@@ -24,9 +24,9 @@ from adapters.sim_adapter import (
 logger = logging.getLogger(__name__)
 
 # 安全限制（相对 spawn，AirSimNH 地面起飞）
-_MIN_ALT    = 2.0    # 最低允许高度（m），比 spawn 高至少 2m
-_MAX_ALT    = 200.0  # 最高允许高度（m）
-_ARRIVE_DIST = 2.5   # 到达判定半径（3D，m）
+_MIN_ALT    = 0.5    # 室内最低巡航高度（m）
+_MAX_ALT    = 4.0    # 室内最高允许高度（m）
+_ARRIVE_DIST = 0.5   # 室内到达判定半径（3D，m）
 
 
 class MavsdkAdapter(SimAdapter):
@@ -320,11 +320,11 @@ class MavsdkAdapter(SimAdapter):
         except Exception as e:
             return ActionResult(False, str(e))
 
-    def takeoff(self, altitude=5.) -> ActionResult:
+    def takeoff(self, altitude=1.5) -> ActionResult:
         """起飞到相对 spawn 的高度（米）。"""
         if not self._connected:
             return ActionResult(False, "Not connected")
-        altitude = max(altitude, _MIN_ALT)
+        altitude = min(max(altitude, _MIN_ALT), _MAX_ALT)
         try:
             self._landed = False
             self._ra(self._system.action.set_takeoff_altitude(altitude), 5)
@@ -407,7 +407,7 @@ class MavsdkAdapter(SimAdapter):
                 f"fly_to_ned: rel({north:.1f},{east:.1f},{down:.1f}) "
                 f"-> abs({tgt_n:.1f},{tgt_e:.1f},{tgt_d:.1f})")
 
-            speed = min(max(speed, 0.5), 10.0)
+            speed = min(max(speed, 0.3), 1.5)
             self._stop_req = False
             self.is_flying = True
             self._start_safety()
@@ -471,7 +471,7 @@ class MavsdkAdapter(SimAdapter):
                         vn, ve = 0., 0.
 
                     # vertical velocity (proportional, clamped ±3 m/s)
-                    vd = max(min(dd * 0.5, 3.0), -3.0)
+                    vd = max(min(dd * 0.5, 0.75), -0.75)
 
                     # yaw towards target
                     if h_dist > 2.:
@@ -537,7 +537,7 @@ class MavsdkAdapter(SimAdapter):
                             f"Altitude: {cur_alt:.1f}m -> {final:.1f}m")
 
                     dd = tgt_d - cd
-                    vd = max(min(dd * 0.5, 3.), -3.)
+                    vd = max(min(dd * 0.5, 0.75), -0.75)
                     self._ra(self._vel_cmd(0, 0, vd, self._hdg))
                     time.sleep(0.1)
 

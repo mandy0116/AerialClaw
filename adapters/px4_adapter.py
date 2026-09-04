@@ -12,7 +12,7 @@ from adapters.sim_adapter import (
 )
 
 logger = logging.getLogger(__name__)
-_MIN_ALT, _MAX_ALT, _ARRIVE_DIST = 2.0, 200.0, 0.5
+_MIN_ALT, _MAX_ALT, _ARRIVE_DIST = 0.5, 4.0, 0.5
 
 
 class PX4Adapter(SimAdapter):
@@ -164,9 +164,9 @@ class PX4Adapter(SimAdapter):
         try: self._ra(self._system.action.disarm(), 10); return ActionResult(True, "Disarmed")
         except Exception as e: return ActionResult(False, str(e))
 
-    def takeoff(self, altitude=5.) -> ActionResult:
+    def takeoff(self, altitude=1.5) -> ActionResult:
         if not self._connected: return ActionResult(False, "Not connected")
-        altitude = max(altitude, _MIN_ALT)
+        altitude = min(max(altitude, _MIN_ALT), _MAX_ALT)
         try:
             self._landed = False
             self._ra(self._system.action.set_takeoff_altitude(altitude), 5)
@@ -221,7 +221,7 @@ class PX4Adapter(SimAdapter):
         try:
             down = self._clamp_alt(down)
             tgt_n, tgt_e, tgt_d = self._rel_to_abs(north, east, down)
-            speed = min(max(speed, 0.5), 10.0)
+            speed = min(max(speed, 0.3), 1.5)
             self._stop_req = False
             self.is_flying = True
             self._ra(self._enter_offboard())
@@ -242,7 +242,7 @@ class PX4Adapter(SimAdapter):
                     vh = speed if hd > 15. else max(speed*(hd/15.), 0.3)
                     vn = vh*(dn/hd) if hd > 0.3 else 0.
                     ve = vh*(de/hd) if hd > 0.3 else 0.
-                    vd = max(min(dd*0.5, 3.), -3.)
+                    vd = max(min(dd*0.5, 0.75), -0.75)
                     yaw = math.degrees(math.atan2(de,dn)) if hd > 2. else self._hdg
                     self._ra(self._vel_cmd(vn,ve,vd,yaw))
                     time.sleep(0.1)
@@ -275,7 +275,7 @@ class PX4Adapter(SimAdapter):
                         fa = -(self._abs_pos.down - self._sp_d)
                         return ActionResult(True, f"Altitude: {fa:.1f}m")
                     dd = tgt_d - self._abs_pos.down
-                    self._ra(self._vel_cmd(0, 0, max(min(dd*0.5,3.),-3.), self._hdg))
+                    self._ra(self._vel_cmd(0, 0, max(min(dd*0.5,0.75),-0.75), self._hdg))
                     time.sleep(0.1)
                 self._ra(self._vel_cmd(0,0,0,self._hdg))
                 return ActionResult(False, "Altitude change timeout")

@@ -63,7 +63,7 @@
 4. **VLM 视觉**：现 VLM 走 deepseek-v4-flash（纯文本，无视觉）。实机若要"观察/扫描/拍照分析"语言指令，需加真视觉模型（Ollama `qwen2.5-vl` 或云端 vision API），否则这类指令会报错。
 5. **LLM 渠道稳定性**：deepseek 本机网络抖动严重（30s 超时/断连交替）；glm-5.2 token 与 Claude Code 会话共享、可能过期。实机伴飞电脑需稳定联网或本地 ollama；建议配多渠道 + `ACTIVE_PROVIDER` 可切。
 6. **传感器替换**：仿真靠 gz 传感器桥接（`gz_sensor_bridge.py`）；实机靠飞控真实 IMU/GPS/mag + 真实相机（用 OpenCV 抓图替换 gz 桥接）。`fly_to_ned` 用 GPS NED，真实 GPS 误差 ±2-3m（仿真 cm 级），"固定距离飞行"会有米级偏差，要更准需 RTK 或光流。
-7. **安全护栏（实机必做）**：RC 手动接管全程、飞控侧地理围栏 + failsafe、`_MAX_ALT` 按场地调小、离地高度限制、先系绳/空旷试飞。LLM 决策护栏（skill 层检查 GPS fix / 解锁状态 / 单次位移上限）**待加**。
+7. **安全护栏（实机必做）**：RC 手动接管全程、飞控侧地理围栏 + failsafe、离地高度限制、先系绳测试。应用层已加入室内硬包线（速度/高度/围栏/单次位移/电量），但它不能替代飞控侧 failsafe。
 8. **RTL/降落**：PX4 main 仿真中 RTL 回 home 后不自动着陆（转 HOLD 悬停）；仿真侧曾加 `return_to_launch` 强制 land 但**本会话末已应用户要求回退**，当前为原样。实机需确认 `RTL_LAND_FINAL` 参数或保留强制 land 逻辑。
 9. **mavsdk_server 自愈**：已加 `_run_telem` 捕获断连重连（~8s 自愈），但重连窗口内技能可能失败需重试；实机数传断连更频繁，需重点验证。
 10. **起飞重量**：仿真云台 0.11kg 不影响起飞；实机 SIYI A8 Mini 重量需计入无人机总重，确认推力余量。

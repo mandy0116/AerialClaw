@@ -17,9 +17,53 @@ import time
 import math
 import logging
 
+from core.flight_safety import (
+    check_altitude,
+    check_battery,
+    check_target,
+    get_flight_envelope,
+    limit_speed,
+)
 from skills.base_skill import Skill, SkillResult
 
 logger = logging.getLogger(__name__)
+
+
+def _safety_rejection(message: str) -> SkillResult:
+    logger.warning("[Safety] blocked flight command: %s", message)
+    return SkillResult(
+        success=False,
+        error_msg=f"室内安全限制: {message}",
+        logs=[f"🛑 室内安全限制: {message}"],
+    )
+
+
+def _current_altitude(adapter, pos=None) -> float:
+    if hasattr(adapter, "_get_altitude"):
+        return float(adapter._get_altitude())
+    pos = pos or adapter.get_position()
+    return -float(pos.down)
+
+
+def _check_adapter_target(adapter, pos, north, east, down, altitude):
+    home = getattr(adapter, "_home_position", None)
+    return check_target(
+        pos,
+        north,
+        east,
+        down,
+        altitude,
+        home_north=getattr(home, "north", 0.0),
+        home_east=getattr(home, "east", 0.0),
+    )
+
+
+def _check_adapter_battery(adapter):
+    try:
+        _, battery = adapter.get_battery()
+    except Exception:
+        battery = None
+    return check_battery(battery)
 
 
 def _get_adapter():
@@ -93,12 +137,12 @@ def _log_state(adapter, label: str = ""):
 
 class Takeoff(Skill):
     name = "takeoff"
-    description = "从当前高度往上飞指定米数（相对上升）。altitude=30表示从当前位置再往上飞30米。"
+    description = "室内安全起飞到指定离地高度；默认 1.5m，最高 4m。"
     skill_type = "hard"
     robot_type = ["UAV"]
     preconditions = []
     cost = 2.0
-    input_schema = {"altitude": "float，起飞目标高度（米），默认 5.0"}
+    input_schema = {"altitude": "float，起飞目标离地高度（米），默认 1.5，范围 0.5-4.0"}
     output_schema = {"actual_altitude": "float", "takeoff_time": "float"}
 
     def check_precondition(self, robot_state: dict) -> bool:
@@ -110,10 +154,20 @@ class Takeoff(Skill):
             logger.warning("[Takeoff] already in air")
             return SkillResult(success=False, error_msg="无人机已在空中，无法起飞", logs=["❌ 前提检查失败: 已在空中"])
 
-        altitude = input_data.get("altitude", 5.0)
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器", logs=["❌ 无适配器连接"])
+
+        try:
+            altitude = float(input_data.get("altitude", 1.5))
+        except (TypeError, ValueError):
+            return _safety_rejection("起飞高度必须是数值")
+        altitude_check = check_altitude(altitude)
+        if not altitude_check.ok:
+            return _safety_rejection(altitude_check.message)
+        battery_check = _check_adapter_battery(adapter)
+        if not battery_check.ok:
+            return _safety_rejection(battery_check.message)
 
         _log_state(adapter, "PRE-TAKEOFF")
         logger.info(f"[Takeoff] adapter.takeoff({altitude}) [{adapter.name}]")
@@ -188,14 +242,14 @@ class Land(Skill):
 
 class FlyTo(Skill):
     name = "fly_to"
-    description = "底层移动技能：飞到指定AirSim世界坐标。z越负越高，地面z≈-13。⚠️使用前必须先get_position！"
+    description = "室内点到点移动；使用 NED 坐标，单次不超过 3m，速度不超过 1.5m/s。"
     skill_type = "hard"
     robot_type = ["UAV"]
     preconditions = []
     cost = 3.0
     input_schema = {
-        "target_position": "[x, y, z] AirSim世界坐标。z越负越高，地面z≈-13。z=-43表示离地30m。先get_position再决定坐标！",
-        "speed": "float，飞行速度 m/s，默认 15.0，⚠️ 必须传 speed=15，不要用低速度",
+        "target_position": "[north, east, down] NED 坐标。必须先 get_position，单次距离不超过 3m",
+        "speed": "float，飞行速度 m/s，默认 1.0，最高 1.5",
     }
     output_schema = {"arrived_position": "[n, e, d]", "distance_traveled": "float", "altitude": "float", "start_position": "[n, e, d]"}
 
@@ -203,25 +257,34 @@ class FlyTo(Skill):
         return True
 
     def execute(self, input_data: dict) -> SkillResult:
-        target = input_data.get("target_position", [0, 0, -43])
-        speed = max(float(input_data.get("speed", 15.0)), 15.0)  # 最低 15 m/s
+        if not _check_in_air():
+            return SkillResult(success=False, error_msg="无人机不在空中，请先起飞")
+        target = input_data.get("target_position")
+        if not isinstance(target, (list, tuple)) or len(target) != 3:
+            return _safety_rejection("target_position 必须是包含 3 个数值的 NED 坐标")
+        speed, speed_limited = limit_speed(input_data.get("speed", 1.0))
         logger.info(f"[FlyTo] target={target} speed={speed}")
 
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
+        battery_check = _check_adapter_battery(adapter)
+        if not battery_check.ok:
+            return _safety_rejection(battery_check.message)
         
         pos = adapter.get_position()
-
-        # 直接使用世界坐标 [x, y, z]
-        n, e = float(target[0]), float(target[1])
-        d = float(target[2]) if len(target) > 2 else -43.0
+        try:
+            n, e, d = (float(target[0]), float(target[1]), float(target[2]))
+        except (TypeError, ValueError):
+            return _safety_rejection("target_position 必须只包含有限数值")
 
         # 获取离地高度用于日志
-        if hasattr(adapter, '_get_altitude'):
-            current_alt = adapter._get_altitude()
-        else:
-            current_alt = abs(pos.down)
+        current_alt = _current_altitude(adapter, pos)
+        target_check = _check_adapter_target(adapter, pos, n, e, d, current_alt)
+        if not target_check.ok:
+            return _safety_rejection(target_check.message)
+        if speed_limited:
+            logger.warning("[Safety] FlyTo speed limited to %.1fm/s", speed)
 
         horiz = math.sqrt((n - pos.north)**2 + (e - pos.east)**2)
         logger.info(
@@ -235,10 +298,7 @@ class FlyTo(Skill):
         dt = round(time.time() - t0, 2)
 
         final_pos = adapter.get_position()
-        if hasattr(adapter, '_get_altitude'):
-            final_alt = adapter._get_altitude()
-        else:
-            final_alt = abs(final_pos.down)
+        final_alt = _current_altitude(adapter, final_pos)
         dist = math.sqrt((final_pos.north - pos.north)**2 + (final_pos.east - pos.east)**2)
         err = math.sqrt((final_pos.north - n)**2 + (final_pos.east - e)**2 + (final_pos.down - d)**2)
         logger.info(
@@ -304,7 +364,12 @@ class Hover(Skill):
             logger.warning("[Hover] not in air")
             return SkillResult(success=False, error_msg="无人机不在空中，无法悬停", logs=["❌ 前提检查失败: 不在空中"])
 
-        duration = float(input_data.get("duration", 5.0))
+        try:
+            duration = float(input_data.get("duration", 5.0))
+        except (TypeError, ValueError):
+            return _safety_rejection("悬停时长必须是数值")
+        if not math.isfinite(duration) or not 0.1 <= duration <= 30.0:
+            return _safety_rejection("单次悬停时长必须在 0.1-30s")
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
@@ -340,25 +405,36 @@ class ChangeAltitude(Skill):
     robot_type = ["UAV"]
     preconditions = []
     cost = 2.0
-    input_schema = {"altitude": "float，目标高度（米，正数），默认 10.0"}
+    input_schema = {"altitude": "float，室内目标离地高度（米），默认 1.5，范围 0.5-4.0"}
     output_schema = {"arrived_position": "[n, e, d]", "target_altitude": "float"}
 
     def check_precondition(self, robot_state: dict) -> bool:
         return True
 
     def execute(self, input_data: dict) -> SkillResult:
-        altitude = float(input_data.get("altitude", 10.0))
+        if not _check_in_air():
+            return SkillResult(success=False, error_msg="无人机不在空中，请先起飞")
+        try:
+            altitude = float(input_data.get("altitude", 1.5))
+        except (TypeError, ValueError):
+            return _safety_rejection("目标高度必须是数值")
+        altitude_check = check_altitude(altitude)
+        if not altitude_check.ok:
+            return _safety_rejection(altitude_check.message)
         logger.info(f"[ChangeAltitude] target_alt={altitude}")
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
+        battery_check = _check_adapter_battery(adapter)
+        if not battery_check.ok:
+            return _safety_rejection(battery_check.message)
 
         # 优先用 _get_altitude() 获取离地高度
         if hasattr(adapter, '_get_altitude'):
             current_alt = adapter._get_altitude()
         else:
             pos = adapter.get_position()
-            current_alt = abs(pos.down)
+            current_alt = -pos.down
 
         logger.info(f"[ChangeAltitude] {current_alt:.1f}m → {altitude:.1f}m")
         _log_state(adapter, "PRE-CHALT")
@@ -368,21 +444,24 @@ class ChangeAltitude(Skill):
         delta = altitude - current_alt
         if hasattr(adapter, 'change_altitude_relative'):
             logger.info(f"[ChangeAltitude] using adapter.change_altitude_relative(delta={delta:.1f})")
-            result = adapter.change_altitude_relative(delta, speed=8.0)
+            result = adapter.change_altitude_relative(delta, speed=get_flight_envelope().max_speed)
         else:
             logger.info(f"[ChangeAltitude] fallback: fly_to_ned for vertical")
             pos = adapter.get_position()
-            # 计算目标 z（世界坐标）
-            ground_z = getattr(adapter, '_ground_z', -13.0)
-            target_z = ground_z - altitude
-            result = adapter.fly_to_ned(pos.north, pos.east, target_z, speed=15.0)
+            # Use current position and measured altitude so this works for both
+            # relative-NED and world-coordinate adapters.
+            target_z = pos.down + current_alt - altitude
+            result = adapter.fly_to_ned(
+                pos.north, pos.east, target_z,
+                speed=get_flight_envelope().max_speed,
+            )
         dt = round(time.time() - t0, 2)
 
         if hasattr(adapter, '_get_altitude'):
             final_alt = adapter._get_altitude()
         else:
             final_pos = adapter.get_position()
-            final_alt = abs(final_pos.down)
+            final_alt = -final_pos.down
         final_pos = adapter.get_position()
         logger.info(f"[ChangeAltitude] ok={result.success} {current_alt:.1f}→{final_alt:.1f}m {dt}s")
         _log_state(adapter, "POST-CHALT")
@@ -505,13 +584,13 @@ class GetBattery(Skill):
 
 class ReturnToLaunch(Skill):
     name = "return_to_launch"
-    description = "无人机返回起飞位置并自动降落。调用后无人机会在地面, 不需要再额外调用 land。"
+    description = "室内安全模式下原地降落；不执行可能爬升且依赖 GPS 的室外 RTL。"
     skill_type = "hard"
     robot_type = ["UAV"]
     preconditions = []
     cost = 2.0
     input_schema = {}
-    output_schema = {"rtl_time": "float"}
+    output_schema = {"rtl_time": "float", "safety_mode": "indoor_land_in_place"}
 
     def check_precondition(self, robot_state: dict) -> bool:
         return True
@@ -522,19 +601,22 @@ class ReturnToLaunch(Skill):
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
 
-        _log_state(adapter, "PRE-RTL")
+        _log_state(adapter, "PRE-INDOOR-RTL")
         t0 = time.time()
-        result = adapter.return_to_launch()
+        # PX4 RTL commonly climbs to a configured return altitude and depends
+        # on GPS. Both behaviours are hazardous under an indoor ceiling, so
+        # the indoor policy intentionally lands at the current position.
+        result = adapter.land()
         dt = round(time.time() - t0, 2)
-        logger.info(f"[ReturnToLaunch] ok={result.success} msg='{result.message}' {dt}s")
-        _log_state(adapter, "POST-RTL")
+        logger.info(f"[ReturnToLaunch/IndoorLand] ok={result.success} msg='{result.message}' {dt}s")
+        _log_state(adapter, "POST-INDOOR-RTL")
 
         return SkillResult(
             success=result.success,
-            output={"rtl_time": dt},
+            output={"rtl_time": dt, "safety_mode": "indoor_land_in_place"},
             error_msg=result.message if not result.success else "",
             cost_time=dt,
-            logs=[f"RTL: {result.message} [{adapter.name}] {dt}s"],
+            logs=[f"室内 RTL 已转换为原地降落: {result.message} [{adapter.name}] {dt}s"],
         )
 
 
@@ -557,7 +639,7 @@ class FlyRelative(Skill):
         "forward": "float, 向前(+)或向后(-), 单位米, 默认0",
         "right": "float, 向右(+)或向左(-), 单位米, 默认0",
         "up": "float, 向上(+)或向下(-), 单位米, 默认0",
-        "speed": "float, 飞行速度 m/s, 默认 15.0，⚠️ 必须传 speed=15",
+        "speed": "float, 飞行速度 m/s, 默认 1.0，最高 1.5",
     }
     output_schema = {
         "start_position": "[n, e, d]",
@@ -580,14 +662,22 @@ class FlyRelative(Skill):
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
+        battery_check = _check_adapter_battery(adapter)
+        if not battery_check.ok:
+            return _safety_rejection(battery_check.message)
 
-        fwd = float(input_data.get("forward", 0))
-        rgt = float(input_data.get("right", 0))
-        up = float(input_data.get("up", 0))
-        speed = max(float(input_data.get("speed", 15.0)), 15.0)  # 最低 15 m/s
+        try:
+            fwd = float(input_data.get("forward", 0))
+            rgt = float(input_data.get("right", 0))
+            up = float(input_data.get("up", 0))
+        except (TypeError, ValueError):
+            return _safety_rejection("相对移动参数必须是数值")
+        speed, speed_limited = limit_speed(input_data.get("speed", 1.0))
+        if speed_limited:
+            logger.warning("[Safety] FlyRelative speed limited to %.1fm/s", speed)
 
         # ── LiDAR 前置障碍检测 ──
-        MIN_SAFE_DIST = 3.0  # 米
+        MIN_SAFE_DIST = get_flight_envelope().min_obstacle_distance
         try:
             from skills.perception_skills import get_sensor_bridge
             bridge = get_sensor_bridge()
@@ -655,6 +745,12 @@ class FlyRelative(Skill):
         target_d = pos.down + dd
         distance = math.sqrt(dn**2 + de**2 + dd**2)
 
+        target_check = _check_adapter_target(
+            adapter, pos, target_n, target_e, target_d, _current_altitude(adapter, pos)
+        )
+        if not target_check.ok:
+            return _safety_rejection(target_check.message)
+
         dirs = []
         if fwd > 0: dirs.append(f"前{fwd:.0f}m")
         elif fwd < 0: dirs.append(f"后{-fwd:.0f}m")
@@ -718,11 +814,22 @@ class LookAround(Skill):
 
     def execute(self, input_data: dict) -> SkillResult:
         logger.info(f"[LookAround] input={input_data}")
+        if not _check_in_air():
+            return SkillResult(success=False, error_msg="无人机不在空中，无法旋转观察")
         adapter = _get_adapter()
         if adapter is None:
             return SkillResult(success=False, error_msg="无仿真适配器")
 
-        duration = float(input_data.get("duration", 8))
+        try:
+            duration = float(input_data.get("duration", 8))
+        except (TypeError, ValueError):
+            return _safety_rejection("旋转时长必须是数值")
+        envelope = get_flight_envelope()
+        min_duration = 360.0 / envelope.max_yaw_rate
+        if not math.isfinite(duration) or duration < min_duration:
+            return _safety_rejection(
+                f"旋转时长不得短于 {min_duration:.1f}s（偏航上限 {envelope.max_yaw_rate:.0f}°/s）"
+            )
         state = adapter.get_state()
         heading_start = state.heading_deg if hasattr(state, 'heading_deg') else 0
 
@@ -958,12 +1065,12 @@ class OrbitInspect(Skill):
     cost = 15.0
     input_schema = {
         "center": "[x, y], 建筑中心 AirSim世界坐标（米）",
-        "radius": "float, 绕飞半径（米）, 即建筑外墙到航点的距离, 默认 25",
-        "start_height": "float, 起始巡检高度（米）, 默认 20",
-        "end_height": "float, 终止巡检高度（米）, 默认 80",
-        "height_step": "float, 每层高度间隔（米）, 默认 15",
-        "points_per_layer": "int, 每层航点数, 默认 8 (八边形)",
-        "speed": "float, 飞行速度 m/s, 默认 15.0，⚠️ 必须传 speed=15",
+        "radius": "float, 室内绕飞半径（米），默认 2",
+        "start_height": "float, 起始巡检高度（米），默认 1.5",
+        "end_height": "float, 终止巡检高度（米），默认 3.5",
+        "height_step": "float, 每层高度间隔（米），默认 1",
+        "points_per_layer": "int, 每层航点数，默认 4",
+        "speed": "float, 飞行速度 m/s，默认 1.0，最高 1.5",
         "focus": "str, VLM 重点关注内容, 默认 '检查窗户是否破损、裂纹、缺失，外墙是否有开裂或异常'",
     }
     output_schema = {
@@ -980,13 +1087,25 @@ class OrbitInspect(Skill):
         logger.info(f"[OrbitInspect] input={input_data}")
 
         center = input_data.get("center", [0, 0])
-        radius = float(input_data.get("radius", 25))
-        start_h = float(input_data.get("start_height", 20))
-        end_h = float(input_data.get("end_height", 80))
-        h_step = float(input_data.get("height_step", 15))
-        pts_per_layer = int(input_data.get("points_per_layer", 8))
-        speed = float(input_data.get("speed", 15.0))  # 强制最低
-        speed = max(speed, 15.0)
+        try:
+            radius = float(input_data.get("radius", 2.0))
+            start_h = float(input_data.get("start_height", 1.5))
+            end_h = float(input_data.get("end_height", 3.5))
+            h_step = float(input_data.get("height_step", 1.0))
+            pts_per_layer = int(input_data.get("points_per_layer", 4))
+        except (TypeError, ValueError):
+            return _safety_rejection("巡检参数必须是有效数值")
+        speed, speed_limited = limit_speed(input_data.get("speed", 1.0))
+        if speed_limited:
+            logger.warning("[Safety] OrbitInspect speed limited to %.1fm/s", speed)
+        if radius <= 0 or h_step <= 0 or pts_per_layer < 3 or pts_per_layer > 12:
+            return _safety_rejection("巡检半径/层高步长必须为正，且每层航点数必须为 3-12")
+        for height in (start_h, end_h):
+            altitude_check = check_altitude(height)
+            if not altitude_check.ok:
+                return _safety_rejection(altitude_check.message)
+        if end_h < start_h:
+            return _safety_rejection("终止巡检高度不得低于起始高度")
         focus = input_data.get("focus",
             "检查窗户是否破损、裂纹、缺失，外墙是否有开裂或异常")
 
@@ -996,8 +1115,16 @@ class OrbitInspect(Skill):
         if not _check_in_air():
             return SkillResult(success=False,
                 error_msg="无人机不在空中，请先执行 takeoff 起飞")
+        battery_check = _check_adapter_battery(adapter)
+        if not battery_check.ok:
+            return _safety_rejection(battery_check.message)
 
-        cn, ce = float(center[0]), float(center[1])
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            return _safety_rejection("center 必须是包含 2 个数值的水平坐标")
+        try:
+            cn, ce = float(center[0]), float(center[1])
+        except (TypeError, ValueError):
+            return _safety_rejection("center 必须只包含有限数值")
         start_time = time.time()
         all_observations = []
         logs = []
@@ -1015,9 +1142,6 @@ class OrbitInspect(Skill):
                      f"{len(layers)}层 ({start_h}-{end_h}m), 每层{pts_per_layer}点")
 
         for layer_idx, height in enumerate(layers):
-            # 世界坐标：target_z = ground_z - height
-            ground_z = getattr(adapter, '_ground_z', -13.0)
-            target_down = ground_z - height  # AirSim世界坐标，z越负越高
             logs.append(f"📐 第{layer_idx+1}层: 高度{height}m")
 
             for pt_idx in range(pts_per_layer):
@@ -1025,6 +1149,27 @@ class OrbitInspect(Skill):
                 angle = 2 * math.pi * pt_idx / pts_per_layer
                 wp_n = cn + radius * math.cos(angle)
                 wp_e = ce + radius * math.sin(angle)
+
+                current_pos = adapter.get_position()
+                current_altitude = _current_altitude(adapter, current_pos)
+                target_down = current_pos.down + current_altitude - height
+                target_check = _check_adapter_target(
+                    adapter,
+                    current_pos,
+                    wp_n,
+                    wp_e,
+                    target_down,
+                    current_altitude,
+                )
+                if not target_check.ok:
+                    logs.append(f"🛑 航点被室内安全限制拦截: {target_check.message}")
+                    return SkillResult(
+                        success=False,
+                        output={"observations": all_observations},
+                        error_msg=f"室内安全限制: {target_check.message}",
+                        cost_time=round(time.time() - start_time, 1),
+                        logs=logs,
+                    )
 
                 # 飞到航点
                 result = adapter.fly_to_ned(wp_n, wp_e, target_down, speed)

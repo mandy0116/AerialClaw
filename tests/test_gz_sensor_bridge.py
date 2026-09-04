@@ -38,7 +38,9 @@ def test_bridge_imports_and_exposes_server_api():
 
     status = bridge.get_status()
     assert status["running"] is False
-    assert set(status["cameras"].keys()) == {"front", "rear", "left", "right", "down"}
+    assert set(status["cameras"].keys()) == {
+        "front", "rear", "left", "right", "down", "gimbal"
+    }
 
 
 def test_camera_decode_updates_latest_frame_and_info():

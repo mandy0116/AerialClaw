@@ -82,6 +82,7 @@ decision 含义:
 - 到达最终目标点后, 只需要执行一次 report(汇总所有发现) → 直接判 done! 不要再 observe/fly_to!
 - 不要等降落完全确认! return_to_launch 发出后就视为任务完成
 - 如果 land 或 return_to_launch 失败, 不要反复重试, 直接判 done 并在 summary 中说明
+- 室内模式下 return_to_launch 会原地降落，不会执行依赖 GPS 或先爬升的室外 RTL
 - summary 中汇总你的观察结果和关键发现
 - ⚠️ 到达最后一个目的地 → report(汇总文字) → done，三步走，不要犹豫!
 - report 的 content 就是纯文字汇总，直接写在 content 参数里，不要生成文件、不要生成 HTML、不要调用 write_file!
@@ -111,33 +112,38 @@ decision 含义:
 
 高度理解（地面 down≈0）:
   down = 0    → 地面
-  down = -10   → 离地 10m
-  down = -30   → 离地 30m
+  down = -1.5  → 离地 1.5m
+  down = -4    → 室内高度上限 4m
   ⚠️ down 接近 0 或正值 = 撞地！down 必须是负值才在空中。
+
+⚠️ 当前为室内严格安全模式:
+- 合速度最高 1.5m/s，高度范围 0.5-4m，水平电子围栏半径 8m
+- 单次三维移动不得超过 3m；长路径必须分段，每段移动前重新感知
+- 不得为了越障盲目升高；接近高度上限时优先悬停或横向绕行
 
 各移动技能用法:
 - fly_to: target_position=[north, east, down]，绝对 NED 世界坐标。东南西北等绝对方位一律用 fly_to。
-  例: 从当前位置向东 5 米 → target_position=[当前north, 当前east+5, 当前down]
-  例: 离地 15m → target_position=[north, east, -15]
+  例: 从当前位置向东 2 米 → target_position=[当前north, 当前east+2, 当前down]
+  例: 离地 2m → target_position=[north, east, -2]
 - fly_relative: forward/right/up，机体坐标系（相对无人机当前朝向，会随航向变化！）
   - forward=前、right=右、up=上(正)/下(负)
   - ⚠️ right ≠ 东！航向一漂，right 可能变成南/西/北。只有"沿当前朝向"移动时才用 fly_relative。
   - 想去东南西北等绝对方位 → 用 fly_to，不要用 fly_relative。
-- change_altitude: delta参数，正数=升高，负数=下降。delta=20 从当前升高20m
-- takeoff: altitude 正数，表示从当前位置往上飞多少米
+- change_altitude: altitude 参数是目标离地高度，不是增量；范围 0.5-4m
+- takeoff: altitude 是目标离地高度，建议 1.5m
 - get_position 返回 [north, east, down]，altitude 字段是离地高度（正数，米）
 
 ⚠️ 最常见的错误:
-- down 给了正值或接近 0 → 撞地！飞行中 down 必须 ≤ -8（保持 ≥8m 离地高度）。
-- 想飞到 15m 高 → down=-15，不是 down=-1.5 或 down=15。
+- down 给了正值或接近 0 → 撞地！室内巡航保持离地 0.5-4m。
+- 想飞到 1.5m 高 → 相对起飞点的 NED 通常 down=-1.5；始终以 get_position 返回值计算。
 - 用 fly_relative(right=5) 表达"向东 5 米" → 错！东是绝对方位，要用 fly_to(east=当前east+5)。
 - 不确定当前位置/高度 → 先 get_position。
 
 ⚠️ 飞行黄金法则 — 先感知再行动:
 1. 飞往任何位置之前, 必须先 get_position 了解当前位置和高度
-2. fly_to 需要你给完整的 [north, east, down], down 必须 ≤ -8 (≥8m 离地, 防撞地)!
+2. fly_to 需要完整的 [north, east, down]，且单次移动不超过 3m
 3. 不确定安全高度? 先 perceive 看前方, 或保持当前高度
-4. 遇到障碍? 先 change_altitude 升高, 或 fly_relative 绕行
+4. 遇到障碍? 先悬停并观察，再在 4m 高度上限内横向绕行
 5. 绝对不要盲飞! 每次移动前都要有信息支撑
 
 重要 — 行动优先, 不要原地打转:
@@ -659,11 +665,11 @@ class AgentLoop:
         logger.warning(f"[AgentLoop] 达到最大迭代 ({self.max_iterations})")
         self.on_complete(False, f"达到最大迭代次数 ({self.max_iterations}), 任务未完成")
         self._update_memory(False)
-        # 安全措施: 达到最大迭代后自动返航
+        # 安全措施: 达到最大迭代后按室内策略原地降落
         self._safe_return()
 
     def _safe_return(self):
-        """达到最大迭代/stuck 后，让 LLM 规划安全返航。"""
+        """室内任务异常结束时直接原地降落，不再让 LLM 追加飞行。"""
         try:
             from adapters.adapter_manager import get_adapter
             adapter = get_adapter()
@@ -675,56 +681,20 @@ class AgentLoop:
                     in_air = True  # 无法确认时假设在空中
 
             if not in_air:
-                logger.info("[AgentLoop] 不在空中，无需返航")
+                logger.info("[AgentLoop] 不在空中，无需安全降落")
                 return
 
-            logger.info("[AgentLoop] 任务结束但仍在空中，启动 LLM 规划返航...")
-
-            # 获取当前状态
-            world_state = self.world_model.get_world_state()
-            pos_info = ""
-            for rid, rd in world_state.get("robots", {}).items():
-                pos = rd.get("position", [0, 0, 0])
-                pos_info += f"{rid}: 位置NED=({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}), 电量={rd.get('battery', '?')}%"
-
-            return_prompt = f"""任务已结束（达到最大迭代次数或遇到困难），但你仍然在空中。
-当前状态: {pos_info}
-请立即规划安全返航到起飞点并降落。不要继续执行原任务。
-输出一个简短的返航计划即可。"""
-
-            try:
-                raw = self.llm.chat([
-                    {"role": "system", "content": "你是一架无人机，任务已结束，需要安全返航。直接输出返航动作。"},
-                    {"role": "user", "content": return_prompt},
-                ], temperature=0.3, max_tokens=2000)
-
-                parsed = _parse_agent_output(raw)
-                if parsed and parsed.get("decision") == "act":
-                    action = parsed.get("action", {})
-                    skill_name = action.get("skill", "")
-                    parameters = action.get("parameters", {})
-                    if skill_name:
-                        logger.info(f"[AgentLoop] 返航规划: {skill_name} {parameters}")
-                        result = self.runtime.dispatch_skill({
-                            "skill": skill_name,
-                            "robot": action.get("robot", "UAV_1"),
-                            "parameters": parameters,
-                        })
-                        if result.success:
-                            logger.info("[AgentLoop] 返航动作执行成功")
-                        else:
-                            logger.warning(f"[AgentLoop] 返航动作失败: {result.error_msg}, 回退到 return_to_launch")
-                            self.runtime.dispatch_skill({"skill": "return_to_launch", "robot": "UAV_1", "parameters": {}})
-                        return
-            except Exception as e:
-                logger.warning(f"[AgentLoop] LLM 返航规划失败: {e}")
-
-            # LLM 规划失败时的兜底
-            logger.info("[AgentLoop] 兜底: 执行 return_to_launch")
-            self.runtime.dispatch_skill({"skill": "return_to_launch", "robot": "UAV_1", "parameters": {}})
+            logger.warning("[AgentLoop] 室内任务异常结束，立即原地安全降落")
+            result = self.runtime.dispatch_skill({
+                "skill": "return_to_launch",
+                "robot": "UAV_1",
+                "parameters": {},
+            })
+            if not result.success:
+                logger.error("[AgentLoop] 室内安全降落失败: %s", result.error_msg)
 
         except Exception as e:
-            logger.error("[AgentLoop] 安全返航异常: %s", e)
+            logger.error("[AgentLoop] 室内安全降落异常: %s", e)
 
     def _update_memory(self, success):
         """

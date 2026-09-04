@@ -41,9 +41,11 @@ class AirSimPhysicsAdapter(SimAdapter):
         self._client = None          # 状态查询 + 紧急停止
         self._fly_client = None      # 飞行指令
         self._connected = False
+        self._armed = False
 
         # 地面 z 坐标（连接时从当前位置读取）
         self._ground_z: float = -13.0  # 默认值，连接后自动读取
+        self._home_position = Position()
         # 飞行模式: "teleport"=瞬移插值(演示用,快), "physics"=真实物理飞行(论文验证用)
         # 通过环境变量 FLIGHT_MODE 控制，默认 teleport
         import os as _os
@@ -222,10 +224,10 @@ class AirSimPhysicsAdapter(SimAdapter):
         """
         # ── 控制参数 ──
         Kp = 0.015           # 位置→姿态 P 增益（越大越猛，越小越平滑）
-        MAX_ANGLE = 0.35     # 最大倾斜角 rad（约20°）
-        ARRIVE_DIST = 5.0    # 到达判定 m
+        MAX_ANGLE = math.radians(15.0)  # 室内最大倾斜角
+        ARRIVE_DIST = 0.5    # 室内短航段到达判定
         CMD_DT = 0.1         # 控制周期 s（10Hz）
-        SAFE_DIST = 8.0      # 障碍安全距离
+        SAFE_DIST = 2.0      # 室内障碍最小净距
 
         self.is_flying = True
         start_time = time.time()
@@ -354,6 +356,7 @@ class AirSimPhysicsAdapter(SimAdapter):
         self.is_flying = True
         try:
             cx, cy, cz = self._get_xyz()
+            self._home_position = Position(cx, cy, cz)
             dx = target_x - cx
             dy = target_y - cy
             dz = target_z - cz
@@ -458,38 +461,21 @@ class AirSimPhysicsAdapter(SimAdapter):
                 logger.warning("Fly client connect failed, sharing main client")
                 self._fly_client = self._client
 
-            # 启用 API 控制 + 解锁
+            # 启用 API 控制；解锁只允许由显式 arm/takeoff 操作触发。
             self._client.enable_api_control(True, self._vehicle_name)
-            self._client.arm_disarm(True, self._vehicle_name)
             self._connected = True
 
-            # 读取当前位置的 z 作为 GROUND_Z（地面参考高度）
-            # 连接时传送到安全高度（保持当前 xy，z 设为地面以上 30m）
+            # Connecting must never move the aircraft.  The old outdoor demo
+            # path teleported it to 30 m here, which is unsafe indoors and made
+            # connection establishment itself a flight command.
             cx, cy, cz = self._get_xyz()
-            safe_z = self._ground_z - 30.0  # 地面以上 30m
-            if cz > safe_z + 5:  # 如果太低（接近地面或地下）
-                logger.info(f"无人机位置过低 (z={cz:.1f})，传送到安全高度 z={safe_z:.1f}")
-                import math
-                yaw_rad = self._get_current_yaw()
-                qw = math.cos(yaw_rad / 2)
-                qz_q = math.sin(yaw_rad / 2)
-                init_pose = {
-                    "position": {"x_val": cx, "y_val": cy, "z_val": safe_z},
-                    "orientation": {"w_val": qw, "x_val": 0.0, "y_val": 0.0, "z_val": qz_q},
-                }
-                try:
-                    self._client._rpc.call("simSetVehiclePose", init_pose, True, self._vehicle_name)
-                    time.sleep(1.0)
-                    logger.info(f"已传送到安全高度: ({cx:.1f}, {cy:.1f}, {safe_z:.1f})")
-                except Exception as e:
-                    logger.warning(f"传送失败: {e}")
+            logger.info("AirSim initial pose retained: (%.1f, %.1f, %.1f)", cx, cy, cz)
             try:
                 raw_state = self._client.get_multirotor_state(self._vehicle_name) or {}
                 pos_data = raw_state.get("kinematics_estimated", {}).get("position", {})
-                current_z = float(pos_data.get("z_val", -13.0))
-                # 不用当前位置作为地面（可能在空中），硬编码上海场景地面 z
-                self._ground_z = -13.0
-                logger.info(f"Ground z hardcoded: {self._ground_z:.3f}")
+                current_z = float(pos_data.get("z_val", cz))
+                self._ground_z = current_z
+                logger.info(f"Ground z calibrated from retained pose: {self._ground_z:.3f}")
             except Exception as e:
                 self._ground_z = -13.0
                 logger.warning(f"Failed to read ground z, using default -13.0: {e}")
@@ -529,6 +515,7 @@ class AirSimPhysicsAdapter(SimAdapter):
                 pass
 
         self._connected = False
+        self._armed = False
         self._client = None
         self._fly_client = None
 
@@ -554,7 +541,7 @@ class AirSimPhysicsAdapter(SimAdapter):
 
             # 直接使用世界坐标
             return VehicleState(
-                armed=True,
+                armed=self._armed,
                 in_air=in_air,
                 mode="PHYSICS",
                 position_ned=Position(north=x, east=y, down=z),
@@ -576,7 +563,7 @@ class AirSimPhysicsAdapter(SimAdapter):
         return (12.6, 100.0)
 
     def is_armed(self) -> bool:
-        return self._connected
+        return self._armed
 
     def is_in_air(self) -> bool:
         _, _, z = self._get_xyz()
@@ -587,6 +574,7 @@ class AirSimPhysicsAdapter(SimAdapter):
     def arm(self) -> ActionResult:
         try:
             self._client.arm_disarm(True, self._vehicle_name)
+            self._armed = True
             return ActionResult(success=True, message="Armed")
         except Exception as e:
             return ActionResult(success=False, message=str(e))
@@ -594,11 +582,12 @@ class AirSimPhysicsAdapter(SimAdapter):
     def disarm(self) -> ActionResult:
         try:
             self._client.arm_disarm(False, self._vehicle_name)
+            self._armed = False
             return ActionResult(success=True, message="Disarmed")
         except Exception as e:
             return ActionResult(success=False, message=str(e))
 
-    def takeoff(self, altitude: float = 5.0) -> ActionResult:
+    def takeoff(self, altitude: float = 1.5) -> ActionResult:
         """
         使用 AirSim 原生 takeoff API 起飞，然后用 moveByRollPitchYawZ 上升到目标高度。
         altitude: 相对地面高度（米）。
@@ -606,6 +595,10 @@ class AirSimPhysicsAdapter(SimAdapter):
         if not self._connected:
             return ActionResult(success=False, message="Not connected")
         try:
+            if not self._armed:
+                arm_result = self.arm()
+                if not arm_result.success:
+                    return arm_result
             self._landed = False
             logger.info(f"Takeoff: native takeoff API -> then rise to {altitude}m")
 
@@ -613,10 +606,8 @@ class AirSimPhysicsAdapter(SimAdapter):
             self._fly_client.takeoff_async_join(timeout_sec=20.0,
                                                 vehicle_name=self._vehicle_name)
 
-            # 2. moveByRollPitchYawZ 上升到目标高度
-            # 读取当前位置作为起始点，target_z = current_z - altitude
-            _, _, current_z = self._get_xyz()
-            target_z = current_z - altitude  # 从当前位置往上飞 altitude 米
+            # 2. Move to the requested absolute height above the calibrated floor.
+            target_z = self._ground_z - altitude
             self._fly_client.move_by_roll_pitch_yaw_z(
                 0.0, 0.0, 0.0, target_z, 5.0, self._vehicle_name
             )
@@ -645,10 +636,10 @@ class AirSimPhysicsAdapter(SimAdapter):
             _, _, start_z = self._get_xyz()
             logger.info(f"Land: depth-based descent from z={start_z:.2f}")
 
-            LAND_DEPTH_THRESHOLD = 4.0   # cam_down 检测到 < 4m 障碍 = 接近地面
-            SLOW_DEPTH_THRESHOLD = 10.0  # < 10m 切慢降
-            FAST_STEP = 3.0              # 高空每 tick 下降 3m
-            SLOW_STEP = 0.8              # 接近地面每 tick 下降 0.8m
+            LAND_DEPTH_THRESHOLD = 0.3   # 只有非常接近表面才判定着陆
+            SLOW_DEPTH_THRESHOLD = 1.5   # < 1.5m 切慢降
+            FAST_STEP = 0.5              # 室内保守下降步长
+            SLOW_STEP = 0.15
             CMD_DUR = 0.25
             TIMEOUT = 120.0
             MAX_STEPS = 400              # 安全上限
@@ -656,9 +647,15 @@ class AirSimPhysicsAdapter(SimAdapter):
             current_yaw = self._get_current_yaw()
             start_t = time.time()
             step_count = 0
+            landed_detected = False
 
             while time.time() - start_t < TIMEOUT and step_count < MAX_STEPS:
                 step_count += 1
+
+                current_altitude = self._get_altitude()
+                if current_altitude <= 0.2:
+                    landed_detected = True
+                    break
 
                 # 外部打断
                 if self._stop_requested:
@@ -674,6 +671,7 @@ class AirSimPhysicsAdapter(SimAdapter):
                     if down_depth < LAND_DEPTH_THRESHOLD:
                         logger.info(f"Land: 下方障碍 {down_depth:.1f}m < {LAND_DEPTH_THRESHOLD}m，判定着陆")
                         self._emergency_hover()
+                        landed_detected = True
                         break
                     # 根据下方距离动态调整下降速度
                     step_size = SLOW_STEP if down_depth < SLOW_DEPTH_THRESHOLD else FAST_STEP
@@ -682,7 +680,7 @@ class AirSimPhysicsAdapter(SimAdapter):
                     step_size = SLOW_STEP
 
                 cx, cy, cz = self._get_xyz()
-                target_z = cz + step_size  # z 增大 = NED 向下
+                target_z = cz + min(step_size, current_altitude)  # 不穿过地面
 
                 try:
                     self._fly_client.move_by_roll_pitch_yaw_z(
@@ -693,7 +691,19 @@ class AirSimPhysicsAdapter(SimAdapter):
 
                 time.sleep(CMD_DUR)
 
+            if not landed_detected:
+                self._emergency_hover()
+                return ActionResult(
+                    success=False,
+                    message="Landing timeout before ground confirmation",
+                )
+
             self._landed = True
+            self._armed = False
+            try:
+                self._client.arm_disarm(False, self._vehicle_name)
+            except Exception:
+                logger.warning("AirSim disarm after landing failed", exc_info=True)
             _, _, final_z = self._get_xyz()
             elapsed = round(time.time() - start_t, 1)
             logger.info(f"Land done: z={start_z:.2f} → {final_z:.2f}, steps={step_count}, {elapsed}s")
@@ -776,14 +786,14 @@ class AirSimPhysicsAdapter(SimAdapter):
             )
 
             # 安全检查：不能降到地面以下
-            if target_alt < 2.0:
-                if current_alt < 3.0:
+            if target_alt < 0.5:
+                if current_alt < 0.6:
                     msg = f"已在最低安全高度({current_alt:.1f}m)，无法继续下降"
                     logger.warning(f"⚠️ {msg}")
                     return ActionResult(success=False, message=msg)
-                logger.warning(f"⚠️ 目标高度 {target_alt:.1f}m 过低，限制到 2m")
-                target_z = self._ground_z - 2.0
-                target_alt = 2.0
+                logger.warning(f"⚠️ 目标高度 {target_alt:.1f}m 过低，限制到 0.5m")
+                target_z = self._ground_z - 0.5
+                target_alt = 0.5
 
             ARRIVE_DIST = 1.5   # 垂直到达判定（米）
             CMD_DURATION = 0.5
@@ -867,14 +877,16 @@ class AirSimPhysicsAdapter(SimAdapter):
         if not self._connected:
             return ActionResult(success=False, message="Not connected")
         try:
-            # 保持当前高度或至少 5m 飞回原点上方
-            alt = max(self._get_altitude(), 5.0)
+            # 室内返航保持当前高度，绝不为返航额外爬升。
+            alt = self._get_altitude()
             target_z = self._ground_z - alt  # 地面以上 alt 米
             logger.info(
-                f"RTL: flying to origin (0,0) at z={target_z:.1f}"
+                f"RTL: flying to home ({self._home_position.north:.1f},"
+                f"{self._home_position.east:.1f}) at z={target_z:.1f}"
             )
             result = self._fly_with_interrupt(
-                0.0, 0.0, target_z, speed=5.0,
+                self._home_position.north, self._home_position.east,
+                target_z, speed=1.5,
                 timeout_sec=120.0, check_obstacle=True,
             )
             if result == 'obstacle':

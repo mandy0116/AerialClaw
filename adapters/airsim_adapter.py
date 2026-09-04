@@ -36,6 +36,7 @@ class AirSimAdapter(SimAdapter):
         self._vehicle_name = vehicle_name
         self._client = None
         self._connected = False
+        self._armed = False
         self._spawn_z: float = 0.0
         self._spawn_x: float = 0.0  # spawn 点 x，用于坐标归零
         self._spawn_y: float = 0.0  # spawn 点 y，用于坐标归零
@@ -161,7 +162,7 @@ class AirSimAdapter(SimAdapter):
         - 正常到达 → 返回 'ok'
         """
         import math
-        SAFE_DIST = 8.0      # 前方安全距离（米），低于此距离停下
+        SAFE_DIST = 2.0      # 室内障碍最小净距
         CHECK_INTERVAL = 15  # 每 15 步检查一次（~500ms）
         
         self.is_flying = True
@@ -302,27 +303,18 @@ class AirSimAdapter(SimAdapter):
             if not self._client.ping():
                 raise ConnectionError("ping failed")
             self._client.enable_api_control(True, self._vehicle_name)
-            self._client.arm_disarm(True, self._vehicle_name)
             self._connected = True
-
-            # 传送到地面原点，确保 spawn_z 是真实地面值
-            import time as _t
-            try:
-                # (15, -5) settings.json 原始 spawn 点，直接传送到 100m 高空避开地面障碍
-                ground_pose = {
-                    "position": {"x_val": 15.0, "y_val": -5.0, "z_val": -100.0},
-                    "orientation": {"w_val": 1.0, "x_val": 0.0, "y_val": 0.0, "z_val": 0.0},
-                }
-                self._client._rpc.call("simSetVehiclePose", ground_pose, True, self._vehicle_name)
-                _t.sleep(2.0)  # 等2秒让物理引擎落地稳定
-            except Exception as _tp_err:
-                logger.warning(f"Ground teleport failed: {_tp_err}")
-
-            # 地面 z≈2.0（实测），直接硬编码，不等物理引擎落地
-            self._spawn_z = 2.0
-            self._spawn_x = 15.0  # spawn 传送目标 x (settings.json 原始 spawn)
-            self._spawn_y = -5.0  # spawn 传送目标 y
-            logger.info(f"Ground calibrated: spawn=({self._spawn_x},{self._spawn_y},{self._spawn_z}), start at 100m altitude")
+            # Connection is not a flight command: retain and calibrate from the
+            # simulator's current pose instead of arming and teleporting.
+            self._spawn_x, self._spawn_y, self._spawn_z = self._xyz()
+            self._hold_x, self._hold_y, self._hold_z = (
+                self._spawn_x, self._spawn_y, self._spawn_z
+            )
+            self._landed = True
+            logger.info(
+                "Spawn retained at (%.1f, %.1f, %.1f)",
+                self._spawn_x, self._spawn_y, self._spawn_z,
+            )
             self._home_position = Position(north=0.0, east=0.0, down=0.0)
             # 第二个 RPC 连接，专门给 hold 线程用（避免和摄像头/LiDAR 抢 socket）
             try:
@@ -360,9 +352,9 @@ class AirSimAdapter(SimAdapter):
             except Exception:
                 pass
         self._connected = False
+        self._armed = False
         self._client = None
 
-    @property
     def is_connected(self) -> bool:
         return self._connected
 
@@ -380,7 +372,7 @@ class AirSimAdapter(SimAdapter):
             rel_n = x - self._spawn_x
             rel_e = y - self._spawn_y
             return VehicleState(
-                armed=True,
+                armed=self._armed,
                 in_air=in_air,
                 position_ned=Position(north=rel_n, east=rel_e, down=altitude),
                 battery_percent=100.0,
@@ -427,7 +419,7 @@ class AirSimAdapter(SimAdapter):
         return None
 
     def is_armed(self) -> bool:
-        return self._connected
+        return self._armed
 
     def is_in_air(self) -> bool:
         if self._landed:
@@ -438,6 +430,7 @@ class AirSimAdapter(SimAdapter):
     def arm(self) -> ActionResult:
         try:
             self._client.arm_disarm(True, self._vehicle_name)
+            self._armed = True
             return ActionResult(success=True, message="Armed")
         except Exception as e:
             return ActionResult(success=False, message=str(e))
@@ -445,24 +438,30 @@ class AirSimAdapter(SimAdapter):
     def disarm(self) -> ActionResult:
         try:
             self._client.arm_disarm(False, self._vehicle_name)
+            self._armed = False
             return ActionResult(success=True, message="Disarmed")
         except Exception as e:
             return ActionResult(success=False, message=str(e))
 
-    def takeoff(self, altitude: float = 5.0) -> ActionResult:
-        """从当前高度往上飞 altitude 米（相对上升）。"""
+    def takeoff(self, altitude: float = 1.5) -> ActionResult:
+        """起飞到相对起飞点的目标离地高度。"""
         if not self._connected:
             return ActionResult(success=False, message="Not connected")
         try:
+            if not self._armed:
+                arm_result = self.arm()
+                if not arm_result.success:
+                    return arm_result
             x, y, z0 = self._xyz()
             current_alt = -(z0 - self._spawn_z)
-            # 相对上升：从当前z往上飞altitude米
-            target_z = z0 - altitude  # z减小=向上
-            logger.info(f"Takeoff: current={current_alt:.1f}m, +{altitude}m -> target_z={target_z:.3f}")
+            target_z = self._spawn_z - altitude  # z减小=向上
+            logger.info(f"Takeoff: current={current_alt:.1f}m, target={altitude}m -> target_z={target_z:.3f}")
             self._landed = False  # 起飞，清除着陆标记
             if not self._hold_running:
                 self._set_pose(x, y, z0)
-            result = self._fly_smooth(x, y, target_z, speed=5.0)
+            result = self._fly_smooth(x, y, target_z, speed=1.0)
+            if result != "ok":
+                return ActionResult(False, f"Takeoff interrupted: {result}")
             _, _, actual_z = self._xyz()
             actual_alt = -(actual_z - self._spawn_z)
             logger.info(f"Takeoff confirmed: altitude={actual_alt:.1f}m")
@@ -475,7 +474,7 @@ class AirSimAdapter(SimAdapter):
         if not self._connected:
             return ActionResult(success=False, message="Not connected")
         try:
-            FINAL_DIST = 1.5     # 下方<1.5m时认为已着陆，停止
+            FINAL_DIST = 0.3     # 下方非常接近地面时才判定着陆
             MAX_STEPS = 300
             
             x, y, z = self._xyz()
@@ -496,7 +495,7 @@ class AirSimAdapter(SimAdapter):
                 current_alt = -(z - self._spawn_z)
                 
                 # 已经很低，停止
-                if current_alt < 2.0:
+                if current_alt < 0.2:
                     logger.info(f"Land: altitude={current_alt:.1f}m, near ground")
                     break
                 
@@ -507,22 +506,24 @@ class AirSimAdapter(SimAdapter):
                     # 非常接近地面/屋顶，停止
                     logger.info(f"Land: 下方{below_dist:.1f}m，已着陆")
                     break
-                elif below_dist is not None and below_dist < 8.0:
-                    # 接近地面，慢降 1m
-                    target_z = z + 1.0
-                    self._fly_smooth_raw(x, y, target_z, speed=1.5)
+                elif below_dist is not None and below_dist < 1.5:
+                    # 接近地面，慢降 0.2m
+                    target_z = z + 0.2
+                    self._fly_smooth_raw(x, y, target_z, speed=0.5)
                 else:
-                    # 高空，快速降 5m
-                    target_z = z + 5.0
-                    self._fly_smooth_raw(x, y, target_z, speed=5.0)
+                    target_z = z + min(0.5, current_alt)
+                    self._fly_smooth_raw(x, y, target_z, speed=1.0)
             
             _, _, final_z = self._xyz()
             final_alt = -(final_z - self._spawn_z)
             self._landed = True  # 标记已着陆
+            self._armed = False
+            try:
+                self._client.arm_disarm(False, self._vehicle_name)
+            except Exception:
+                logger.warning("AirSim disarm after landing failed", exc_info=True)
             logger.info(f"Land confirmed: altitude={final_alt:.1f}m, landed=True")
             return ActionResult(success=True, message=f"Landed at {final_alt:.1f}m")
-            logger.info(f"Land confirmed: altitude={final_alt:.1f}m")
-            return ActionResult(success=True, message=f"Landed at altitude={final_alt:.1f}m")
         except Exception as e:
             return ActionResult(success=False, message=str(e))
 
@@ -535,11 +536,6 @@ class AirSimAdapter(SimAdapter):
             # 归零坐标 → AirSim 绝对坐标
             abs_x = north + self._spawn_x
             abs_y = east + self._spawn_y
-            # 安全高度限制：城市环境最低 50m（down ≤ -50）
-            MIN_ALT = 50.0
-            if down > -MIN_ALT:
-                logger.warning(f"⚠️ 目标高度 {-down:.0f}m 低于安全高度 {MIN_ALT:.0f}m，自动提升")
-                down = -MIN_ALT
             target_z = self._spawn_z + down
             logger.info(f"fly_to_ned: rel({north:.1f},{east:.1f},{down:.1f}) -> abs({abs_x:.1f},{abs_y:.1f},{target_z:.3f})")
             if not self._hold_running:
@@ -594,7 +590,7 @@ class AirSimAdapter(SimAdapter):
             # body frame → world frame（简化：不考虑 yaw 旋转）
             self._hold_x += forward * dt
             self._hold_y += right * dt
-            self._hold_z += -down * dt  # NED down正=向下，z减小=向上，取反
+            self._hold_z += down * dt  # NED: down > 0 means descending
 
             return ActionResult(success=True, message='velocity set')
         except Exception as e:
@@ -613,11 +609,11 @@ class AirSimAdapter(SimAdapter):
             if not self._hold_running:
                 x, y, z = self._xyz()
                 self._set_pose(x, y, z)
-            # 先飞到 spawn 点上方（保持当前高度或至少50m）
+            # 室内返航保持当前高度，避免旧逻辑强制爬升到 50m。
             x, y, z = self._xyz()
-            safe_z = min(z, self._spawn_z - 50.0)  # 至少50m高度
+            safe_z = z
             logger.info(f"RTL: flying to spawn ({self._spawn_x},{self._spawn_y}) at z={safe_z:.1f}")
-            result = self._fly_smooth(self._spawn_x, self._spawn_y, safe_z, speed=8.0)
+            result = self._fly_smooth(self._spawn_x, self._spawn_y, safe_z, speed=1.5)
             if result == 'obstacle':
                 return ActionResult(success=False, message="RTL: 返航途中遇到障碍物，已悬停")
             # 到了 spawn 上方，安全降落

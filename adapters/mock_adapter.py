@@ -69,7 +69,7 @@ class MockAdapter(SimAdapter):
         self._armed = False
         return ActionResult(True, "DISARM (mock)")
 
-    def takeoff(self, altitude=5.0) -> ActionResult:
+    def takeoff(self, altitude=1.5) -> ActionResult:
         self._armed = True
         self._in_air = True
         self._position = Position(0, 0, -altitude)

@@ -117,7 +117,7 @@ class GazeboDirectAdapter(SimAdapter):
         self.armed = False
         return ActionResult(True, "disarmed (gazebo direct)")
 
-    def takeoff(self, altitude: float = 5.0) -> ActionResult:
+    def takeoff(self, altitude: float = 1.5) -> ActionResult:
         self.armed = True
         self.in_air = True
         with self._pose_lock:

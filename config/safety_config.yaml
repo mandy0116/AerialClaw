@@ -6,9 +6,9 @@
 #   standard   — 标准模式（日常使用），合理自动化
 #   permissive — 宽松模式（专家/测试），最大自由度
 #
-# 修改本文件后重启服务生效。
+# 飞行包线会在每条命令前重新读取；安全等级相关服务配置建议重启后使用。
 
-safety_level: standard  # strict / standard / permissive
+safety_level: strict  # 室内测试：所有运动类操作均需确认
 
 # ══════════════════════════════════════════════════════════════
 #  命令过滤
@@ -57,15 +57,18 @@ confirm_required:
 # ══════════════════════════════════════════════════════════════
 
 flight_envelope:
-  max_speed: 10.0          # m/s 最大速度
-  max_altitude: 120.0      # m   最大高度 (FAA/CAAC 限制)
-  min_altitude: 0.5        # m   最低高度 (防止撞地)
-  max_distance: 500.0      # m   最远距离 (从起飞点)
-  min_battery: 15.0        # %   最低电量 → 强制返航
-  critical_battery: 5.0    # %   极低电量 → 强制降落
-  heartbeat_timeout: 10    # s   心跳超时 → 自动悬停
-  max_tilt_angle: 35.0     # deg 最大倾斜角
-  geofence_enabled: true   # 电子围栏开关
+  max_speed: 1.5           # m/s 室内最大合速度
+  max_altitude: 4.0        # m   室内最大离地高度（需低于实际净空）
+  min_altitude: 0.5        # m   巡航最低高度；降落技能不受此项阻止
+  max_distance: 8.0        # m   起飞点水平电子围栏半径
+  max_command_distance: 3.0 # m  单条移动指令最大三维距离
+  min_battery: 30.0        # %   低于此电量禁止起飞及非紧急移动
+  critical_battery: 15.0   # %   驾驶舱仅允许下降/降落
+  heartbeat_timeout: 2     # s   心跳超时 → 自动悬停
+  max_tilt_angle: 15.0     # deg 最大倾斜角
+  max_yaw_rate: 45.0       # deg/s 最大偏航角速度
+  min_obstacle_distance: 2.0 # m 障碍物最小净距
+  geofence_enabled: true   # 室内硬限制；设为 false 也不会关闭
 
 # ══════════════════════════════════════════════════════════════
 #  审批等级定义

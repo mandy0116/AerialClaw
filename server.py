@@ -19,6 +19,7 @@ import sys
 import os
 import json
 import time
+import math
 import base64
 import threading
 import secrets
@@ -77,6 +78,12 @@ class AppState:
         self._ai_thread: Optional[threading.Thread] = None
         self._ai_stop_event = threading.Event()
         self._current_agent_loop = None  # 当前运行的 AgentLoop 实例
+
+        # Manual velocity commands require a heartbeat.  PX4 may otherwise
+        # keep the last offboard setpoint after the browser disappears.
+        self._velocity_lock = threading.Lock()
+        self._velocity_deadline: float = 0.0
+        self._velocity_watchdog_started = False
 
         # 通用设备协议状态（docs/DEVICE_PROTOCOL.md）
         # devices: device_id -> registered metadata/runtime state
@@ -1495,6 +1502,16 @@ def api_set_mode():
     socketio.emit("system_status", _get_system_status())
 
     if new_mode == "ai":
+        # Stop any lingering manual setpoint before handing control to AI.
+        try:
+            from adapters.adapter_manager import get_adapter
+            adapter = get_adapter()
+            if adapter and adapter.is_connected():
+                adapter.stop_velocity()
+        except Exception:
+            logger.warning("Failed to stop manual velocity during mode switch", exc_info=True)
+        with state._velocity_lock:
+            state._velocity_deadline = 0.0
         state.push_log("info", "已切换到 AI 模式，等待任务指令")
 
     return jsonify({"ok": True, "mode": state.mode})
@@ -2547,7 +2564,7 @@ def on_stop_execution():
             try:
                 from adapters.adapter_manager import get_adapter
                 adapter = get_adapter()
-                if adapter and adapter.is_connected and adapter.is_in_air():
+                if adapter and adapter.is_connected() and adapter.is_in_air():
                     result = adapter.hover(2.0)
                     state.push_log("info", f"🔄 悬停中: {result.message}")
                 else:
@@ -2571,24 +2588,135 @@ def on_velocity_control(data):
     if not state.initialized:
         emit("velocity_result", {"ok": False, "error": "系统未初始化"})
         return
-
     from adapters.adapter_manager import get_adapter
     adapter = get_adapter()
     if not adapter or not adapter.is_connected():
         emit("velocity_result", {"ok": False, "error": "适配器未连接"})
         return
 
-    fwd   = float(data.get("forward", 0))
-    right = float(data.get("right", 0))
-    down  = float(data.get("down", 0))
-    yaw   = float(data.get("yaw_rate", 0))
+    from core.flight_safety import (
+        get_flight_envelope,
+        limit_body_velocity,
+        normalize_battery_percent,
+    )
 
-    # 全 0 = 停止
-    if fwd == 0 and right == 0 and down == 0 and yaw == 0:
+    fwd, right, down, yaw, limited = limit_body_velocity(
+        data.get("forward", 0),
+        data.get("right", 0),
+        data.get("down", 0),
+        data.get("yaw_rate", 0),
+    )
+    if state.mode != "manual" and any((fwd, right, down, yaw)):
+        emit("velocity_result", {"ok": False, "error": "AI 模式下禁止驾驶舱速度控制"})
+        return
+
+    # A stop command must remain available even if telemetry is temporarily bad.
+    if not any((fwd, right, down, yaw)):
+        with state._velocity_lock:
+            state._velocity_deadline = 0.0
         result = adapter.stop_velocity()
-    else:
-        result = adapter.set_velocity_body(fwd, right, down, yaw_rate=yaw)
-    emit("velocity_result", {"ok": result.success, "msg": result.message})
+        emit("velocity_result", {"ok": result.success, "msg": result.message})
+        return
+
+    # Do not accept commands that continue climbing outside the ceiling.
+    try:
+        pos = adapter.get_position()
+        altitude = (
+            float(adapter._get_altitude())
+            if hasattr(adapter, "_get_altitude")
+            else -float(pos.down)
+        )
+        envelope = get_flight_envelope()
+        state_snapshot = adapter.get_state()
+        if not adapter.is_in_air() and any((fwd, right, down)):
+            adapter.stop_velocity()
+            emit("velocity_result", {"ok": False, "error": "无人机未起飞，平移指令已拒绝"})
+            return
+        try:
+            _, raw_battery = adapter.get_battery()
+            battery = normalize_battery_percent(raw_battery)
+        except Exception:
+            battery = None
+        if (
+            (battery is None or battery < envelope.critical_battery)
+            and (fwd != 0 or right != 0 or down < 0)
+        ):
+            adapter.stop_velocity()
+            emit("velocity_result", {"ok": False, "error": "电量不可用或已到紧急阈值，仅允许下降/降落"})
+            return
+
+        # Permit a controlled manual descent, but never command through the floor.
+        if down > altitude:
+            down = max(altitude, 0.0)
+            limited = True
+        heading = math.radians(float(getattr(state_snapshot, "heading_deg", 0.0)))
+        vn = fwd * math.cos(heading) - right * math.sin(heading)
+        ve = fwd * math.sin(heading) + right * math.cos(heading)
+        # One second is conservative for adapters whose body setpoint duration
+        # differs from the browser's update interval.
+        predicted_altitude = altitude - down
+        home = getattr(adapter, "_home_position", None)
+        home_north = float(getattr(home, "north", 0.0))
+        home_east = float(getattr(home, "east", 0.0))
+        current_radius = math.hypot(
+            float(pos.north) - home_north, float(pos.east) - home_east
+        )
+        predicted_radius = math.hypot(
+            float(pos.north) + vn - home_north,
+            float(pos.east) + ve - home_east,
+        )
+        if down < 0 and predicted_altitude > envelope.max_altitude:
+            adapter.stop_velocity()
+            emit("velocity_result", {"ok": False, "error": "已达到室内最大高度"})
+            return
+        if (
+            envelope.geofence_enabled
+            and predicted_radius > envelope.max_distance
+            and predicted_radius >= current_radius
+        ):
+            adapter.stop_velocity()
+            emit("velocity_result", {"ok": False, "error": "速度指令将越出室内电子围栏"})
+            return
+    except Exception:
+        adapter.stop_velocity()
+        emit("velocity_result", {"ok": False, "error": "无法读取位置，速度指令已拒绝"})
+        return
+
+    result = adapter.set_velocity_body(fwd, right, down, yaw_rate=yaw)
+    if result.success:
+        with state._velocity_lock:
+            state._velocity_deadline = time.monotonic() + get_flight_envelope().heartbeat_timeout
+            should_start_watchdog = not state._velocity_watchdog_started
+            state._velocity_watchdog_started = True
+        if should_start_watchdog:
+            def _velocity_watchdog():
+                while True:
+                    time.sleep(0.1)
+                    with state._velocity_lock:
+                        deadline = state._velocity_deadline
+                        expired = deadline > 0 and time.monotonic() >= deadline
+                        if expired:
+                            state._velocity_deadline = 0.0
+                    if expired:
+                        try:
+                            current = get_adapter()
+                            if current and current.is_connected():
+                                current.stop_velocity()
+                            state.push_log("warn", "驾驶舱心跳超时，已自动悬停")
+                            socketio.emit("velocity_result", {
+                                "ok": False,
+                                "error": "驾驶舱心跳超时，已自动悬停",
+                            })
+                        except Exception:
+                            logger.exception("Velocity watchdog failed to stop the adapter")
+
+            threading.Thread(target=_velocity_watchdog, daemon=True).start()
+    emit("velocity_result", {
+        "ok": result.success,
+        "msg": result.message,
+        "limited": limited,
+        "applied": {"forward": fwd, "right": right, "down": down, "yaw_rate": yaw},
+    })
 
 
 @socketio.on("get_telemetry")

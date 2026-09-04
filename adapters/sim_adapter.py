@@ -6,7 +6,7 @@ sim_adapter.py
     硬技能 ──调用──→ SimAdapter (抽象接口) ──实现──→ 具体仿真环境
     
     例如：
-        Takeoff.execute() → adapter.takeoff(5.0)
+        Takeoff.execute() → adapter.takeoff(1.5)
             └→ PX4Adapter.takeoff() → MAVSDK arm + takeoff
             └→ AirSimAdapter.takeoff() → AirSim API
             └→ MockAdapter.takeoff() → 模拟返回
@@ -174,7 +174,7 @@ class SimAdapter(ABC):
         pass
     
     @abstractmethod
-    def takeoff(self, altitude: float = 5.0) -> ActionResult:
+    def takeoff(self, altitude: float = 1.5) -> ActionResult:
         """
         起飞到指定高度。
         包括 ARM（如果未 ARM）+ 起飞 + 等待到达目标高度。

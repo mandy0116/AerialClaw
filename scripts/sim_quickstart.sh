@@ -26,6 +26,9 @@ set -euo pipefail
 # pure-Python impl bypasses that descriptor check. Harmless if not needed.
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
 
+# Do not add /opt/homebrew/lib/pythonX/site-packages to a project venv.  Gazebo
+# bindings are discovered narrowly by ensure_gazebo_python_path below.
+
 # AerialClaw hybrid-GPU fix: force gz rendering (server sensors + GUI) onto the
 # NVIDIA dGPU via PRIME offload. Needed on Optimus laptops (e.g. AMD iGPU display
 # + NVIDIA dGPU) where Mesa EGL on the display GPU fails with

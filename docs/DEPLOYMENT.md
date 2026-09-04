@@ -198,7 +198,7 @@ For full PX4/Gazebo integration, use the native setup in `docs/SIMULATION_SETUP.
 
 修改 `config/safety_config.yaml`：
 ```yaml
-safety_level: standard
+safety_level: strict
 ```
 
 ### 四道安全关卡
@@ -208,11 +208,12 @@ safety_level: standard
 3. **分级审批** — 按操作风险分级
 4. **安全包线** — 物理限制硬编码（速度/高度/电量）
 
-安全包线 **不可通过配置关闭**，代码中硬编码：
-- 最大速度: 10 m/s
-- 最大高度: 120 m
-- 最低电量: 15% → 返航, 5% → 降落
-- 心跳超时: 10s → 悬停
+当前默认是室内严格包线，配置只能进一步收紧，不能突破代码硬上限：
+- 最大合速度: 1.5 m/s
+- 最大高度: 4 m；水平电子围栏半径: 8 m
+- 单次三维移动: 3 m；最大偏航速度: 45°/s
+- 起飞最低电量: 30%；紧急阈值: 15%
+- 心跳超时: 2s → 悬停
 
 ---
 

@@ -7,7 +7,7 @@ adapter_manager.py
 
     init_adapter("px4", connection_str="udp://:14540")  # 启动时调用一次
     adapter = get_adapter()                              # 硬技能里获取适配器
-    result = adapter.takeoff(5.0)                       # 调用统一接口
+    result = adapter.takeoff(1.5)                       # 室内默认起飞高度
 """
 
 import logging

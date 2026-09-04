@@ -69,8 +69,8 @@ vehicles:
     
     # 无人机参数 (可选)
     params:
-      max_speed: 5.0               # 最大飞行速度 (m/s)
-      max_altitude: 100.0          # 最大飞行高度 (m)
+      max_speed: 1.5               # 室内最大飞行速度 (m/s)
+      max_altitude: 4.0            # 室内最大离地高度 (m)
       battery_capacity: 5200       # 电池容量 (mAh)
   
   # 第二架无人机 - AirSim 后端 (仅用于感知测试)
@@ -79,7 +79,7 @@ vehicles:
   #   position: [10, 0, 0]
   #   backend: airsim
   #   params:
-  #     max_speed: 5.0
+  #     max_speed: 1.5
 
 # ROS2 话题映射配置
 ros2:
