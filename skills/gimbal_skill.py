@@ -20,9 +20,35 @@ from skills.base_skill import Skill, SkillResult
 
 logger = logging.getLogger(__name__)
 
-ROS_SETUP = os.getenv("ROS_SETUP", "/opt/ros/humble/setup.bash")
+# The real test vehicle currently runs ROS1 Noetic and exposes the A8 Mini
+# services below ``/camera``.  Keep ROS2 available for the Gazebo bridge by
+# selecting the CLI at runtime instead of importing either client library.
+#
+# ``GIMBAL_ROS_VERSION=1`` (default) uses ``rosservice`` and
+# ``photo_function/SetAngle``.  Set ``GIMBAL_ROS_VERSION=2`` for the existing
+# ROS2 simulation bridge; its service type is ``photo_function/srv/SetAngle``.
+GIMBAL_ROS_VERSION = os.getenv("GIMBAL_ROS_VERSION", "1").strip()
+if GIMBAL_ROS_VERSION not in ("1", "2"):
+    logger.warning("Unsupported GIMBAL_ROS_VERSION=%r; falling back to ROS1", GIMBAL_ROS_VERSION)
+    GIMBAL_ROS_VERSION = "1"
+
+ROS_SETUP = os.getenv(
+    "ROS_SETUP",
+    "/opt/ros/noetic/setup.bash" if GIMBAL_ROS_VERSION == "1" else "/opt/ros/humble/setup.bash",
+)
+# Optional overlay (for a locally-built photo_function package).  The real
+# machine installs photo_function into /opt/ros/noetic, so this is empty by
+# default; ROS2 deployments can still use IFC_PRO_DIR as before.
+ROS_WS_SETUP = os.getenv("ROS_WS_SETUP", "")
 IFC_PRO_DIR = os.getenv("IFC_PRO_DIR", "/home/ubuntu/ifc_pro")
-PREFIX = os.getenv("GIMBAL_SERVICE_PREFIX", "common/camera")
+if not ROS_WS_SETUP and GIMBAL_ROS_VERSION == "2":
+    ROS_WS_SETUP = os.path.join(IFC_PRO_DIR, "install", "setup.bash")
+
+PREFIX = os.getenv(
+    "GIMBAL_SERVICE_PREFIX",
+    "camera" if GIMBAL_ROS_VERSION == "1" else "common/camera",
+).strip("/")
+SERVICE_PACKAGE = os.getenv("GIMBAL_SERVICE_PACKAGE", "photo_function")
 ZOOM_STEP_X = 0.5  # 仿真桥接每步 0.5x（与桥接 ZOOM_STEP 一致）
 
 
@@ -35,20 +61,39 @@ def _snake(name: str) -> str:
 
 
 def _ros_call(srv_camel: str, payload: str, timeout: int = 20) -> tuple:
-    """调一个 photo_function ROS2 服务。srv_camel 用 CamelCase 如 SetAngle。
-    topic 名 = PREFIX/<snake>，服务类型 = photo_function/srv/<Camel>。返回 (success, out)。"""
+    """Call one photo_function service through the selected ROS CLI.
+
+    Keeping this as a subprocess is intentional: importing ``rospy`` or
+    ``rclpy`` into the Flask server would couple its Python runtime to the ROS
+    installation.  The ROS1 and ROS2 command syntaxes differ, so the command
+    and success parsing live in one small compatibility layer.
+    """
     short = _snake(srv_camel)
-    cmd = (
-        f'source "{ROS_SETUP}" 2>/dev/null; '
-        f'source "{IFC_PRO_DIR}/install/setup.bash" 2>/dev/null; '
-        f'ros2 service call /{PREFIX}/{short} photo_function/srv/{srv_camel} "{payload}"'
-    )
+    setup_parts = [f'source "{ROS_SETUP}" 2>/dev/null']
+    if ROS_WS_SETUP:
+        setup_parts.append(f'source "{ROS_WS_SETUP}" 2>/dev/null')
+    if GIMBAL_ROS_VERSION == "2":
+        setup_parts.append(
+            f'ros2 service call /{PREFIX}/{short} '
+            f'{SERVICE_PACKAGE}/srv/{srv_camel} "{payload}"'
+        )
+    else:
+        # ROS1 rosservice infers the service type from the advertised service;
+        # unlike ros2 it must not receive a type argument.
+        setup_parts.append(f'rosservice call /{PREFIX}/{short} "{payload}"')
+    cmd = "; ".join(setup_parts)
     try:
         p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return False, "ros2 service call timeout"
+        return False, f"ROS{GIMBAL_ROS_VERSION} service call timeout"
     out = (p.stdout or "") + (p.stderr or "")
-    ok = p.returncode == 0 and ("success=True" in out or "success: True" in out)
+    # ROS1 prints ``success: True`` while ROS2 commonly prints
+    # ``success=True``.  Accept either case and avoid treating a successful
+    # command with a false response as success.
+    import re
+    success_match = re.search(r"\bsuccess\s*[:=]\s*(True|False|true|false)\b", out)
+    response_ok = success_match is not None and success_match.group(1).lower() == "true"
+    ok = p.returncode == 0 and response_ok
     return ok, out.strip()
 
 
@@ -86,7 +131,15 @@ class GimbalControl(Skill):
             if action == "point":
                 yaw = float(input_data.get("yaw", 0.0))
                 pitch = float(input_data.get("pitch", 0.0))
-                ok, out = _ros_call("SetAngle", f"{{yaw_angle: {yaw:.2f}, pitch_angle: {pitch:.2f}, roll_angle: 0.0}}")
+                # The deployed ROS1 photo_function/SetAngle.srv has only
+                # yaw_angle and pitch_angle request fields.  The ROS2 bridge
+                # kept a roll_angle field for its generated interface, so
+                # include it only when using ROS2.
+                angle_payload = f"{{yaw_angle: {yaw:.2f}, pitch_angle: {pitch:.2f}"
+                if GIMBAL_ROS_VERSION == "2":
+                    angle_payload += ", roll_angle: 0.0"
+                angle_payload += "}"
+                ok, out = _ros_call("SetAngle", angle_payload)
                 msg = f"set_angle(yaw={yaw}, pitch={pitch})"
                 # point 也支持 zoom_steps: 转向同时放大, 满足"转向左前方并放大一倍"这类
                 # 复合指令。否则 agent 会用 point+zoom_steps 期望边转边变焦, 而 zoom_steps

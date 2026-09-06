@@ -15,13 +15,15 @@ Gazebo/PX4 SITL → MAVSDK → PX4Adapter → server.py → 浏览器
 真机时：
 
 ~~~text
-真实 PX4 飞控 ─串口/数传─> MAVSDK → PX4Adapter → server.py ← 浏览器
+真实 PX4 飞控 ─串口─> MAVROS（ROS1 Noetic）→ MavrosAdapter → server.py ← 浏览器
                                       │
                                       ├─ WorldModel/遥测 → WebSocket → 浏览器
                                       └─ RealSensorBridge ← RTSP 相机
 ~~~
 
-真机不运行 Gazebo、PX4 SITL 或 sim/gz_sensor_bridge.py。控制适配器仍然是 px4，只是把 PX4_MAVSDK_URL 从 udp://:14540 改成真实串口或数传地址。
+真机不运行 Gazebo、PX4 SITL 或 sim/gz_sensor_bridge.py。真机飞行控制统一使用
+`MavrosAdapter` 通过 ROS1 `/mavros` 控制 PX4；MAVROS 独占飞控串口，AerialClaw
+不再让 MAVSDK 直接打开同一串口。PX4/MAVSDK 适配器仅保留给仿真。
 
 网页“手动模式”和“AI 模式”都不能绕过技能层安全检查；但网页不是飞控级安全系统。飞手必须能通过 RC 退出 Offboard 并接管。
 
@@ -94,7 +96,8 @@ cd AerialClaw
 
 ### 4.2 Python 环境
 
-项目要求 Python 3.10 或更高版本。Jetson 上如果需要使用系统 ROS2 Python 绑定，建议使用能看到系统包的虚拟环境：
+项目要求 Python 3.10 或更高版本。真机使用系统 ROS1 Noetic 的 rospy/消息绑定，
+建议使用能看到系统包的虚拟环境：
 
 ~~~bash
 python3.10 --version
@@ -104,7 +107,9 @@ python -m pip install --upgrade pip wheel setuptools
 python -m pip install -r requirements.txt
 ~~~
 
-如果设备没有 python3.10-venv，先安装发行版对应的 venv 包。requirements.txt 会安装 MAVSDK、Flask、OpenCV、LLM 客户端等依赖；rclpy 不通过 pip 安装，应由 ROS2 系统提供。
+如果设备没有 python3.10-venv，先安装发行版对应的 venv 包。requirements.txt 会安装
+Flask、OpenCV、LLM 客户端等依赖；rospy、mavros_msgs、geometry_msgs 等由 ROS1
+Noetic 系统提供，不要通过 pip 替换它们。
 
 验证基础依赖：
 
@@ -151,20 +156,30 @@ cp .env.example .env
 chmod 600 .env
 ~~~
 
-### 5.1 PX4 串口和真机相机
+### 5.1 ROS1/MAVROS 飞控和真机相机
 
 示例（端口和波特率必须按设备修改）：
 
 ~~~dotenv
-SIM_ADAPTER=px4
-PX4_MAVSDK_URL=serial:///dev/ttyAMA0:921600
+SIM_ADAPTER=mavros
+MAVROS_NAMESPACE=/mavros
 
 # 真机不用 Gazebo 传感器桥
 AERIALCLAW_REAL_CAMERA_BRIDGE=1
-REAL_CAMERA_GIMBAL_URL=rtsp://192.168.144.253:8554/live
+REAL_CAMERA_GIMBAL_URL=rtsp://192.168.144.25:8554/live
+GIMBAL_ROS_VERSION=1
+GIMBAL_SERVICE_PREFIX=camera
+ROS_SETUP=/opt/ros/noetic/setup.bash
 ~~~
 
-如果使用数传或 Wi-Fi MAVLink，填写已经验证过的 MAVSDK URL；不要把仿真的 udp://:14540 当成真实串口配置。
+启动前确认已有 MAVROS 节点连接飞控；不要让 AerialClaw 再启动 MAVSDK 直连，
+也不要把仿真的 udp://:14540 当成真实飞控配置。
+
+在 `bitcq@10.106.167.219` 实测：系统为 Ubuntu 20.04 + ROS1 Noetic，A8 Mini
+服务节点为 `/camera_service`，服务位于 `/camera/*`，设备地址为
+`192.168.144.25`，控制 TCP 端口为 `37260`，RTSP 为 `8554`。飞行控制默认
+通过本仓库的 `MavrosAdapter` 使用现有 `/mavros` 节点，避免与
+`/dev/ttyTHS0` 的 MAVROS 串口连接冲突。
 
 ### 5.2 DeepSeek 规划模型
 
@@ -193,7 +208,7 @@ DeepSeek 文本规划不能自动理解 RTSP 图像。需要二选一：
 python-dotenv 默认不会覆盖已经存在的 shell 环境变量。启动前检查：
 
 ~~~bash
-env | grep -E '^(ACTIVE_PROVIDER|DEEPSEEK_|SIM_ADAPTER|PX4_MAVSDK_URL|AERIALCLAW_REAL_CAMERA_BRIDGE|REAL_CAMERA_)'
+env | grep -E '^(ACTIVE_PROVIDER|DEEPSEEK_|SIM_ADAPTER|MAVROS_NAMESPACE|AERIALCLAW_REAL_CAMERA_BRIDGE|REAL_CAMERA_|GIMBAL_ROS_VERSION|ROS_SETUP)'
 ~~~
 
 ## 6. 先做不启动电机的连接测试
@@ -206,9 +221,12 @@ env | grep -E '^(ACTIVE_PROVIDER|DEEPSEEK_|SIM_ADAPTER|PX4_MAVSDK_URL|AERIALCLAW
 cd ~/AerialClaw
 source .venv/bin/activate
 
-export SIM_ADAPTER=px4
-export PX4_MAVSDK_URL=serial:///dev/ttyAMA0:921600
+export SIM_ADAPTER=mavros
+export MAVROS_NAMESPACE=/mavros
 export AERIALCLAW_REAL_CAMERA_BRIDGE=1
+export GIMBAL_ROS_VERSION=1
+export GIMBAL_SERVICE_PREFIX=camera
+export ROS_SETUP=/opt/ros/noetic/setup.bash
 
 .venv/bin/python server.py
 ~~~
@@ -225,7 +243,7 @@ curl -fsS http://127.0.0.1:5001/api/adapter/status
 curl -fsS http://127.0.0.1:5001/api/world
 ~~~
 
-适配器必须明确显示 adapter=px4 且 connected=true。不能因为网页加载成功就认为已经连接真实飞控；相机桥和控制适配器是两条独立链路。
+适配器必须明确显示 adapter=mavros 且 connected=true。不能因为网页加载成功就认为已经连接真实飞控；相机桥和控制适配器是两条独立链路。
 
 检查日志：
 
@@ -261,7 +279,7 @@ file /tmp/aerialclaw-camera.jpg
 ### Level 0：设备和飞控（拆桨）
 
 1. QGroundControl 能连接 PX4。
-2. AerialClaw /api/adapter/status 为 px4 + connected=true。
+2. AerialClaw /api/adapter/status 为 mavros + connected=true。
 3. 网页能看到电量、位置、航向和 in_air=false。
 4. RC 模式开关、降落开关和 kill switch 已单独验证。
 
@@ -340,11 +358,11 @@ kill switch 不是普通停止按钮；它可能立即切断电机并导致坠�
 - 用户不在 dialout 组；
 - 串口被 QGroundControl、mavlink-router 或其他程序占用；
 - PX4 没有在该链路输出 MAVLink；
-- MAVSDK URL 拼写错误。
+- MAVROS 节点未启动，或 `/mavros/state.connected` 为 false。
 
 ### 网页能打开，但飞机不响应
 
-确认 /api/adapter/status 的 adapter 是 px4，而不是 mock。再看 PX4 是否允许解锁、是否处于正确模式、是否有有效 local position 和 failsafe 阻止。
+确认 /api/adapter/status 的 adapter 是 mavros，而不是 mock。再看 PX4 是否允许解锁、是否处于正确模式、是否有有效 local position 和 failsafe 阻止。
 
 ### 起飞被拒绝
 
@@ -410,7 +428,7 @@ pgrep -af 'server.py|mavsdk|mavlink-router'
 - [ ] RC 接管和独立急停已验证；
 - [ ] PX4 failsafe、限高、限速和围栏已配置；
 - [ ] EKF local position 稳定有效；
-- [ ] /api/adapter/status 明确为 px4 / connected=true；
+- [ ] /api/adapter/status 明确为 mavros / connected=true；
 - [ ] 遥测位置、电量、航向和 in_air 正常；
 - [ ] .env 中没有提交或打印 API Key；
 - [ ] 起飞、悬停、降落已拆桨/系绳分级验证；

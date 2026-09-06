@@ -20,6 +20,7 @@ sim_adapter.py
 支持的仿真环境（已有/计划）：
     - PX4 SITL + Gazebo (通过 MAVSDK-Python) ← 当前实现
     - AirSim (通过 airsim Python API) ← 预留
+    - ROS1 Noetic + MAVROS (通过 adapters/mavros_adapter.py) ← 真机
     - ROS2 (通过 rclpy) ← 预留
     - Mock (纯内存模拟) ← 测试用
 """

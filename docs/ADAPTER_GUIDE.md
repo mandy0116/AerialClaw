@@ -34,6 +34,7 @@ class MyAdapter:
 | Adapter | File | Use Case |
 |---------|------|----------|
 | `PX4Adapter` | `adapters/px4_adapter.py` | PX4 SITL / real PX4 via MAVSDK |
+| `MavrosAdapter` | `adapters/mavros_adapter.py` | ROS1 Noetic MAVROS / real PX4 |
 | `SimAdapter` | `adapters/sim_adapter.py` | Gazebo simulation bridge |
 | `MockAdapter` | `adapters/mock_adapter.py` | Testing without hardware |
 

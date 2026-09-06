@@ -1,6 +1,11 @@
 # gimbal_control — 云台控制
 
-控制机载云台的转向与变焦。底层通过 photo_function ROS2 服务（仿真走 rclpy 桥接节点，真机走 SIYI A8 Mini），API 相同。
+真机默认使用 ROS1 Noetic 的 `photo_function` 服务（`/camera/*`）。仿真
+桥接仍使用 ROS2；运行仿真桥接时设置 `GIMBAL_ROS_VERSION=2`，或直接使用
+`scripts/start_gimbal_bridge.sh`。
+
+控制机载云台的转向与变焦。底层通过 `photo_function` 服务：仿真走 ROS2
+`rclpy` 桥接节点，真机走 ROS1 Noetic 的 SIYI A8 Mini 节点。
 
 ## 参数
 - action: point | zoom_in | zoom_out | zoom_stop | center | rotate
@@ -29,5 +34,6 @@
 
 ## 注意
 - yaw 正=向右，pitch 正=向上（与 SIYI 一致）。
-- 限位：yaw ±120°，pitch -80°~+30°，zoom 1.0~8.0x，超出会被钳制。
+- 仿真桥接限位：yaw ±120°，pitch -80°~+30°，zoom 1.0~8.0x；真机 A8 Mini
+  当前查询到最大变焦为 5.5x，最终限位由设备固件执行。
 - 仿真桥接每步 manual_zoom = 0.5x；真机 SIYI 是连续变焦（需 zoom_stop 停）。

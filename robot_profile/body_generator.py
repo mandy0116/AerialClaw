@@ -50,11 +50,15 @@ def generate_body_md(adapter=None, sensor_bridge=None, skill_registry=None):
     sections.append("\n## 运动能力\n")
     sections.append("- 类型: 多旋翼无人机 (Multirotor)")
     sections.append("- 坐标系: NED 本地坐标 (North-East-Down, 相对起飞点)")
-    sections.append("- 飞行速度: 建议 10-15 m/s, 最大约 30 m/s")
-    sections.append("- 旋转速度: 最大约 45 deg/s")
-    sections.append("- 高度范围: 0-120m (受限于仿真环境)")
-    sections.append("- 定位方式: IMU + 气压计惯性导航 (GPS 信号可能不可用)")
-    sections.append("- 注意: 长距离飞行可能有位置漂移, 建议用视觉地标校正")
+    # Keep the self-description aligned with the non-bypassable indoor
+    # envelope in core/flight_safety.py.  BODY.md is injected into planning
+    # prompts, so stale simulation/Outdoor limits here could mislead an agent.
+    sections.append("- 飞行速度: 室内最大 1.5 m/s (由安全包线强制限制)")
+    sections.append("- 旋转速度: 最大 45 deg/s (由安全包线强制限制)")
+    sections.append("- 高度范围: 室内离地 0.5-4m (由安全包线强制限制)")
+    sections.append("- 水平范围: 起飞点半径最大 8m，单次移动最大 3m")
+    sections.append("- 定位方式: 由当前适配器提供本地位置/GPS；室内需确认 local position 有效")
+    sections.append("- 安全策略: 室内严格模式，低电量、超高、超速和越界指令会被拒绝")
 
     # -- 传感器 --
     sections.append("\n## 传感器\n")
@@ -107,7 +111,8 @@ def generate_body_md(adapter=None, sensor_bridge=None, skill_registry=None):
     # -- 硬件限制 --
     sections.append("\n## 硬件限制\n")
     sections.append("- 电池: 有限续航, 低于 20% 应返航")
-    sections.append("- 通信: MAVLink UDP, 可能受距离影响")
+    transport = "ROS1 Noetic + MAVROS" if adapter and getattr(adapter, "name", "") == "mavros" else "适配器提供的控制链路"
+    sections.append(f"- 通信: {transport}")
     sections.append("- 载荷: 无额外载荷能力 (仅传感器)")
     sections.append("- 天气: 仿真环境无风雨影响, 真实环境需考虑")
 

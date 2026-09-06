@@ -297,6 +297,9 @@ def _try_connect_adapter():
             elif sim_adapter == "mock":
                 state.push_log("info", "Using mock adapter (no hardware)...")
                 ok = init_adapter("mock", timeout=5)
+            elif sim_adapter in ("mavros", "ros1", "mavros_px4"):
+                state.push_log("info", "Connecting to PX4 through ROS1 MAVROS...")
+                ok = init_adapter("mavros", connection_str=os.getenv("MAVROS_NAMESPACE", "/mavros"), timeout=int(os.getenv("PX4_CONNECT_TIMEOUT", "30")))
             elif sim_adapter == "gazebo_direct":
                 state.push_log("info", "Using Gazebo direct adapter (set_pose demo control)...")
                 conn_str = os.getenv("GAZEBO_DIRECT_CONNECTION", "")
@@ -331,10 +334,10 @@ def _try_connect_adapter():
                 _start_airsim_camera_stream()
                 # 启动被动感知引擎
                 _start_passive_perception()
-            elif sim_adapter in ("px4", "gazebo", "gz", "gazebo_direct") \
+            elif sim_adapter in ("px4", "mavros", "ros1", "mavros_px4", "gazebo", "gz", "gazebo_direct") \
                     or os.getenv("AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE") == "1" \
                     or os.getenv("AERIALCLAW_REAL_CAMERA_BRIDGE") == "1":
-                # Gazebo camera/LiDAR topics are independent from MAVSDK control connectivity.
+                # Gazebo camera/LiDAR topics are independent from flight-control connectivity.
                 # Start the sensor bridge even if the PX4 adapter is still connecting or degraded,
                 # so the Web UI can show the AerialClaw modified UAV sensors as soon as Gazebo is up.
                 # AERIALCLAW_REAL_CAMERA_BRIDGE=1 时改用真机相机桥（实机部署，无 Gazebo）。
@@ -358,17 +361,17 @@ def _start_telemetry_sync():
             try:
                 adapter = get_adapter()
                 if adapter and not adapter.is_connected():
-                    # mavsdk_server 可能崩了，尝试自动重连
+                    # MAVSDK/MAVROS 链路可能短暂断开，尝试自动重连
                     _reconnect_attempts += 1
                     wait = min(5 * _reconnect_attempts, _MAX_RECONNECT_INTERVAL)
                     if _reconnect_attempts <= 3 or _reconnect_attempts % 10 == 0:
                         logger.warning(f"PX4 连接丢失，{wait}秒后尝试第{_reconnect_attempts}次重连...")
-                        state.push_log("warning", f"⚠️ MAVSDK 连接丢失，正在重连 (第{_reconnect_attempts}次)...")
+                        state.push_log("warning", f"⚠️ {getattr(adapter, 'name', 'flight')} 连接丢失，正在重连 (第{_reconnect_attempts}次)...")
                     time.sleep(wait)
                     ok = adapter.connect(timeout=15)
                     if ok:
                         logger.info("PX4 自动重连成功")
-                        state.push_log("success", "✅ MAVSDK 自动重连成功")
+                        state.push_log("success", f"✅ {getattr(adapter, 'name', 'flight')} 自动重连成功")
                         _reconnect_attempts = 0
                     continue
                 if adapter and adapter.is_connected():

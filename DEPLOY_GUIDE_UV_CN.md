@@ -400,7 +400,7 @@ find PX4-Autopilot/build -type f -name '*.ulg' -delete
 
 | 环节 | 仿真（第一部分） | 实机（本部分） | 处理 |
 |---|---|---|---|
-| 飞控 | PX4 SITL（`udp://:14540`） | 真实 Pixhawk，串口 UART | 改 `PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600`，代码不动 |
+| 飞控 | PX4 SITL（`udp://:14540`） | 真实 Pixhawk，ROS1 Noetic + MAVROS（串口由 MAVROS 独占） | `SIM_ADAPTER=mavros`，代码通过 `/mavros` 控制 |
 | Gazebo / PX4-Autopilot 源码 / MicroXRCEAgent | 必需 | **不需要** | 实机不跑仿真，这三样在 NX 上不装 |
 | GPU 渲染（PRIME offload） | 必需（相机/gpu_lidar 渲染） | **不需要** | 真机相机是真实视频流，不渲染；NX 有没有独显都行 |
 | 传感器（IMU/GPS/mag） | gz 传感器 | 飞控真实传感器，经 MAVLink | `px4_adapter` 遥测照常工作，不用 gz |
@@ -418,8 +418,8 @@ find PX4-Autopilot/build -type f -name '*.ulg' -delete
 
 | 部件 | 连到 NX 的方式 | 备注 |
 |---|---|---|
-| PX4 飞控（Pixhawk，固件推荐 **v1.15.4**） | UART → `/dev/ttyTHS1`（TX/RX/GND 交叉接） | TELEM 口，波特率匹配 `SER_TELx_BAUD`（常用 921600 或 57600） |
-| SIYI A8 Mini 云台相机 | 以太网（`192.168.144.253`）+ 串口控制（可走 `/dev/ttyTHS2`） | 视频走网口，云台控制可走网口或串口 |
+| PX4 飞控（Pixhawk，固件推荐 **v1.15.4**） | UART → `/dev/ttyTHS0`（由 MAVROS 连接） | MAVROS `fcu_url=/dev/ttyTHS0:921600`，波特率按实际配置 |
+| SIYI A8 Mini 云台相机 | 以太网（`192.168.144.25`） | ROS1 `photo_function` 提供 `/camera/*` 服务；视频 RTSP 8554 |
 | RC 接收机 → 飞控 | 接飞控 RC 口 | **手动接管通道必配**，软件挂了能手动飞 |
 | NX 电源 / 飞控电池 | 各自供电 | 共地 |
 
@@ -431,20 +431,24 @@ find PX4-Autopilot/build -type f -name '*.ulg' -delete
 # 【NX】
 ls -l /dev/ttyACM* /dev/ttyTHS* /dev/ttyUSB* 2>/dev/null   # 飞控/相机串口
 ip addr | grep -E "192.168.144|usb"                        # SIYI 网口
-ls /opt/ros/humble/setup.bash                              # ROS2
-ls ~/ifc_pro/install/setup.bash 2>/dev/null                # 真机 photo_function
+ls /opt/ros/noetic/setup.bash                              # ROS1
+rosnode list | grep /mavros                                  # MAVROS
+rosservice list | grep '^/camera/'                          # 真机 photo_function
 ```
 
-**你这次实测结论**：`/dev/ttyTHS1`、`/dev/ttyTHS2` 在（飞控大概率 `ttyTHS1`）；ROS2 humble ✅；`~/ifc_pro` ❌ 未构建；SIYI 网口 ❌ 未连（usb0/usb1 都 DOWN）。所以下面 S5 先跑飞控，S6/S7 等 SIYI 接好 + ifc_pro 构建后再做。
+**你这次实测结论**：Ubuntu 20.04 + ROS1 Noetic ✅；MAVROS 已使用
+`/dev/ttyTHS0:921600`，`/mavros/state.connected=true`；A8 Mini 服务在
+`/camera/*`，设备地址 `192.168.144.25`，RTSP `8554/live`。因此 S5/S6 均按
+ROS1 执行，不再使用旧的 ROS2/`ifc_pro` 步骤。
 
 ---
 
 ## S2. NX 环境准备
 
-**需要装的**：Ubuntu 22.04 + Python 3.10（系统自带）+ ROS2 humble（已装）。
+**需要装的**：Ubuntu 20.04 + Python 3.10（系统自带）+ ROS1 Noetic（已装）。
 **不需要装的**（仿真专属，实机装了也是浪费）：Gazebo、PX4-Autopilot 源码、MicroXRCEAgent、NVIDIA PRIME offload 那套。
 
-串口权限（飞控 `ttyTHS1` 是 `root:dialout`，`nvidia` 用户要在 dialout 组里）：
+串口权限（飞控 `ttyTHS0` 是 `root:dialout`，运行用户要在 dialout 组里）：
 
 ```bash
 # 【NX】
@@ -488,19 +492,14 @@ scp .env .aerialclaw_llm_config.json nvidia@<NX的IP>:~/AerialClaw/
 ls -l ~/AerialClaw/.env ~/AerialClaw/.aerialclaw_llm_config.json
 ```
 
-**还要把 `ifc_pro` 源码传到 NX**（S6 构建真机 photo_function 用）：
-
-```bash
-# 【开发机】
-rsync -avz --exclude='build' --exclude='install' --exclude='log' \
-  /home/ubuntu/ifc_pro/ nvidia@<NX的IP>:~/ifc_pro/
-```
+真机 photo_function 已作为 ROS1 Noetic 软件包安装在目标机，无需同步或构建旧的
+ROS2 `ifc_pro` 工作区。
 
 ---
 
 ## S4. 建虚拟环境 + 装依赖（NX 上）
 
-和仿真指南同样的关键三参数：**Python 3.10 + `--system-site-packages`**（ROS2 apt 绑定是 cpython-310，必须 3.10 导入）。但 NX 上 uv 可能连不上它的下载镜像（你已遇到 `uv.agentsmirror.com` 超时），所以**用系统自带 3.10、不让 uv 下载**：
+真机使用 Python 3.10 + `--system-site-packages`，以便导入 ROS1 Noetic 的系统绑定。
 
 ```bash
 # 【NX】
@@ -526,7 +525,7 @@ uv pip install -r requirements.txt
 # 【NX】
 source .venv/bin/activate
 python -c "import flask, flask_socketio, flask_cors, mavsdk, cv2; print('后端依赖 OK')"
-python -c "import rclpy; print('rclpy OK')"   # 云台桥接/真机节点需要
+python -c "import rospy, mavros_msgs; print('ROS1 Noetic Python bindings OK')"
 ```
 
 > 若 NX 外网整体受限（连 pypi.org 都不通），在开发机离线打包再传：
@@ -537,16 +536,21 @@ python -c "import rclpy; print('rclpy OK')"   # 云台桥接/真机节点需要
 
 ---
 
-## S5. 连接飞控 PX4（核心，先跑通这条）
+## S5. 连接飞控 PX4（ROS1/MAVROS，核心，先跑通这条）
 
-`px4_adapter` 只是把 `PX4_MAVSDK_URL` 透传给 `mavsdk.System.connect()`，MAVSDK 原生支持串口，**代码不用改**。
+> 本机真机控制统一走 ROS1 Noetic + MAVROS。旧版 `PX4_MAVSDK_URL`、
+> `SIM_ADAPTER=px4` 串口示例不适用于 `10.106.167.219`；请使用
+> `/mavros/state` 和 `SIM_ADAPTER=mavros`。
+
+真机上 MAVROS 节点已经持有飞控串口，AerialClaw 的 `MavrosAdapter` 只订阅/发布
+ROS1 话题和服务，不会再次打开 UART。
 
 ```bash
 # 【NX】拆桨状态下启动
 cd ~/AerialClaw
 source .venv/bin/activate
-export SIM_ADAPTER=px4
-export PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600   # 端口/波特率按你接线改；不行再试 57600
+export SIM_ADAPTER=mavros
+export MAVROS_NAMESPACE=/mavros
 # 关掉仿真专属的 gz 传感器桥（实机没 Gazebo）
 export AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE=0
 .venv/bin/python server.py
@@ -557,12 +561,12 @@ export AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE=0
 ```bash
 # 【NX】另开终端
 curl -s http://localhost:5001/api/adapter/status
-# 期望: {"adapter":"px4","connected":true, "state":{"armed":false,"in_air":false,...}}
+# 期望: {"adapter":"mavros","connected":true, "state":{"armed":false,"in_air":false,...}}
 ```
 
 - `connected:true` 但 `armed` 一直 false → 看飞控是否有 GPS fix、preflight 检查是否通过（PX4 `COM_DISARM_PRFLT` 等参数）。
-- `connected:false` → 90% 是波特率或端口不对。换 `57600`、换 `ttyTHS2` 再试；或 `dmesg | grep tty` 确认串口枚举。
-- 权限拒绝（`Permission denied: /dev/ttyTHS1`）→ S2 的 dialout 组没生效，重新登录。
+- `connected:false` → 检查 MAVROS 的 `fcu_url`、波特率和 `/mavros/state`；或 `dmesg | grep tty` 确认串口枚举。
+- 权限拒绝（`Permission denied: /dev/ttyTHS0`）→ S2 的 dialout 组没生效，重新登录。
 
 > ⚠️ **GPS 精度提示**：`fly_to_ned` 用 GPS 转 NED，真实 GPS（无 RTK）误差 ±2-3m，仿真是 cm 级。所以"向东飞 30 米"实机可能落在 27-33 米。要更准需 RTK 或光流。LLM agent 的"到位"判断也要容忍这个误差。
 
@@ -572,41 +576,36 @@ curl -s http://localhost:5001/api/adapter/status
 
 ## S6. 云台 SIYI A8 Mini + 真机 photo_function 节点
 
-仿真用 `ros2/gimbal_sim_bridge.py` 当假桥；真机换**真实 `photo_function` 节点**（a8_mini 后端直连 SIYI 实物）。`gimbal_control` 技能走的是 `/common/camera/*` ROS2 服务，**两边 API 一样，技能代码完全不改**。
+仿真用 `ros2/gimbal_sim_bridge.py` 当假桥；真机换**真实 `photo_function` 节点**（a8_mini 后端直连 SIYI 实物）。真机 `gimbal_control` 技能默认走 ROS1 `/camera/*` 服务。
 
-### 1) 在 NX 上构建 photo_function（你目前 `~/ifc_pro` 是空的）
+### 1) 启动已安装的 ROS1 photo_function 节点
 
 ```bash
 # 【NX】
-sudo apt install -y python3-colcon-common-extensions ros-humble-rclpy
-cd ~/ifc_pro
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-ros2 pkg list | grep -i photo   # 确认包存在
+source /opt/ros/noetic/setup.bash
+rosrun photo_function a8_mini_service_node
 ```
 
 ### 2) 连通 SIYI A8 Mini
 
-SIYI A8 Mini 默认 IP `192.168.144.253`。NX 的以太网口要配同网段：
+SIYI A8 Mini 当前实测 IP 为 `192.168.144.25`。NX 的以太网口要配同网段：
 
 ```bash
 # 【NX】把连 SIYI 的那个网口配静态 IP（接口名按实际，如 eth0/usb0）
 sudo ip addr add 192.168.144.10/24 dev <接口名>
-ping 192.168.144.253            # 要通
+ping 192.168.144.25              # 要通
 ```
 
-> 视频流地址通常是 `rtsp://192.168.144.253:8554/live`（**以 SIYI 实测/文档为准**），S7 相机桥要用。
+> 视频流地址为 `rtsp://192.168.144.25:8554/live`，S7 相机桥使用该地址。
 
 ### 3) 启动真机 photo_function 节点（替代 sim_bridge）
 
 ```bash
 # 【NX】
-source /opt/ros/humble/setup.bash
-source ~/ifc_pro/install/setup.bash
-ros2 run <photo_function 包> <a8_mini 节点可执行名>   # 按 ifc_pro README 的说明起
+source /opt/ros/noetic/setup.bash
+rosrun photo_function a8_mini_service_node
 # 验证服务在
-ros2 service list | grep -E "common/camera"
+rosservice list | grep '^/camera/'
 # 期望看到 set_angle / manual_zoom / get_current_zoom / get_attitude ...
 ```
 
@@ -641,7 +640,7 @@ import cv2, threading, time, numpy as np
 class RealSensorBridge:
     # 实机一般只有一个云台相机；其余方位可用同一流或留空
     STREAMS = {
-        "gimbal": "rtsp://192.168.144.253:8554/live",   # 以 SIYI 实测为准
+        "gimbal": "rtsp://192.168.144.25:8554/live",
         # "front": "rtsp://...",  # 若有其它相机再填
     }
     def __init__(self):
@@ -684,12 +683,12 @@ cd ~/AerialClaw && source .venv/bin/activate
 export IFC_PRO_DIR=/home/nvidia/ifc_pro                  # gimbal_skill 子进程要用
 export SIM_ADAPTER=mock                                   # 不连飞控
 export AERIALCLAW_REAL_CAMERA_BRIDGE=1                    # 用真机相机桥
-# SIYI RTSP 地址若非默认再覆盖（默认 gimbal=rtsp://192.168.144.253:8554/live）：
-# export REAL_CAMERA_GIMBAL_URL=rtsp://192.168.144.253:8554/live
+# SIYI RTSP 地址若非默认再覆盖：
+# export REAL_CAMERA_GIMBAL_URL=rtsp://192.168.144.25:8554/live
 .venv/bin/python server.py
 ```
 
-云台控制节点另开终端起（source ROS2+ifc_pro）：`ros2 run photo_function camera_service_node`。
+云台控制节点另开终端起（source ROS1 Noetic）：`rosrun photo_function a8_mini_service_node`。
 
 ### 前置检查
 
@@ -751,8 +750,8 @@ curl -s http://localhost:5001/api/llm/config | python3 -m json.tool | head
 # 【NX】
 cd ~/AerialClaw
 source .venv/bin/activate
-export SIM_ADAPTER=px4
-export PX4_MAVSDK_URL=serial:///dev/ttyTHS1:921600
+export SIM_ADAPTER=mavros
+export MAVROS_NAMESPACE=/mavros
 export AERIALCLAW_FORCE_GZ_SENSOR_BRIDGE=0      # 不起 gz 桥；若已接 RealSensorBridge 则去掉这行
 .venv/bin/python server.py
 ```
@@ -770,7 +769,7 @@ http://<NX的IP>:5001
 3. takeoff（拆桨空转）→ stop_execution → 停住。✅
 4. 上桨 → 室外空旷 → 系绳 → 低空悬停 30 秒。✅
 5. 切 AI 模式，发"起飞至 1.5 米并悬停"，手放在 RC 接管开关上。✅
-6. （SIYI 接好后）`ros2 service list | grep camera` → 云台服务在；网页发"云台转向左前方并放大一倍"。✅
+6. （SIYI 接好后）`rosservice list | grep '^/camera/'` → 云台服务在；网页发"云台转向左前方并放大一倍"。✅
 7. （相机桥接好后）`curl -s http://<NX>:5001/api/sensor/status` → `running:true`、gimbal `frame_count` 在涨；网页云台画面有图。✅
 
 ---
@@ -779,11 +778,10 @@ http://<NX的IP>:5001
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `Permission denied: /dev/ttyTHS1` | dialout 组没生效 → `id` 看不到 dialout 就重新登录 |
-| `adapter connected:false` | 端口/波特率不对 → 换 `57600`/`ttyTHS2`；`dmesg \| grep tty` 确认枚举 |
-| `Stream removed / 50051 Connection refused` | mavsdk_server 崩了（已加自愈，~8s 自动重连）；持续不通就重启 server |
-| `ros2 service list` 没有 `common/camera/*` | 真机 photo_function 节点没起，或 `source install/setup.bash` 没做 |
-| `ping 192.168.144.253` 不通 | SIYI 没上电/网线没插；NX 网口没配 192.168.144.x 同网段 |
+| `Permission denied: /dev/ttyTHS0` | dialout 组没生效 → `id` 看不到 dialout 就重新登录 |
+| `adapter connected:false` | MAVROS 未连接 → 检查 `/mavros/state`、`fcu_url` 和波特率 |
+| `rosservice list` 没有 `/camera/*` | 真机 photo_function 节点没起，或未 source `/opt/ros/noetic/setup.bash` |
+| `ping 192.168.144.25` 不通 | SIYI 没上电/网线没插；NX 网口没配 192.168.144.x 同网段 |
 | 云台 zoom 不生效 / 超调 | 真机连续变焦语义和仿真不同，需校准 `ZOOM_STEP_X` 和 zoom_in 循环（S6.4） |
 | 相机画面 NO SIGNAL | 还没接 `RealSensorBridge`（S7），或 RTSP 地址不对 |
 | GPS 不解锁 / `armed` 一直 false | 没搜到星 → 室外等 3D fix；或 pref-light 检查未过（看 PX4 `commander check`） |
@@ -812,8 +810,8 @@ http://<NX的IP>:5001
 ## S13. 实机部署待确认/待补清单（来自 WORKLOG 交接）
 
 1. **PX4 固件版本**：建议统一 v1.15.4（项目针对版本），避免 main 的参数/API 差异。
-2. **飞控串口端口/波特率**：确认 `ttyTHS1` 还是 `ttyTHS2`、921600 还是 57600。
-3. **SIYI 实物 IP/端口 + RTSP 地址**：默认 `192.168.144.253`，RTSP 路径以实测为准。
+2. **飞控串口端口/波特率**：当前 MAVROS 使用 `ttyTHS0:921600`，变更时同步 MAVROS 参数。
+3. **SIYI 实物 IP/端口 + RTSP 地址**：当前为 `192.168.144.25:8554/live`。
 4. **真机 zoom 校准**：`manual_zoom` 连续变焦，需实测每秒放大倍率，调 `gimbal_skill.py` 的 `ZOOM_STEP_X` 与循环逻辑。
 5. **RealSensorBridge 实现**：S7 骨架 + server.py 分支接入（我可在 SIYI 接好后帮你写完整）。
 6. **VLM 视觉模型**：若要"观察/拍照分析"指令，配云端 vision 或本地 `qwen2.5-vl`。

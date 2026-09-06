@@ -11,7 +11,7 @@ get_lidar_info / get_status)，从真实相机视频流（如 SIYI A8 Mini RTSP�
 
 流地址配置（环境变量）：
     REAL_CAMERA_URLS       JSON 映射 {方向: url}，例如
-                           {"gimbal":"rtsp://192.168.144.253:8554/live",
+                           {"gimbal":"rtsp://192.168.144.25:8554/live",
                             "front":"rtsp://..."}
     REAL_CAMERA_GIMBAL_URL 单方向覆盖（也支持 FRONT/REAR/LEFT/RIGHT/DOWN）
 默认只配 gimbal 方向指向 SIYI A8 Mini RTSP；其余方向留空 → 前端显示 NO SIGNAL。
@@ -32,8 +32,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # 默认流地址：SIYI A8 Mini 的 RTSP（以 SIYI 实测/文档为准，可用 env 覆盖）
+# The deployed Jetson test vehicle uses eth0=192.168.144.50 and the SIYI
+# A8 Mini at 192.168.144.25.  Keep the URL overridable through
+# REAL_CAMERA_GIMBAL_URL/REAL_CAMERA_URLS for other airframes.
 _DEFAULT_URLS = {
-    "gimbal": "rtsp://192.168.144.253:8554/live",
+    "gimbal": "rtsp://192.168.144.25:8554/live",
 }
 
 _DIRECTIONS = ("gimbal", "front", "rear", "left", "right", "down")

@@ -48,7 +48,12 @@ def _register_builtins():
         from adapters.px4_adapter import PX4Adapter
         register_adapter("px4", PX4Adapter)
     except ImportError:
-        pass  # mavsdk 未安装时跳过
+        pass  # mavsdk may be unavailable
+    try:
+        from adapters.mavros_adapter import MavrosAdapter
+        register_adapter("mavros", MavrosAdapter)
+    except ImportError:
+        pass  # ROS1/MAVROS may be unavailable
     try:
         from adapters.airsim_adapter import AirSimAdapter
         register_adapter("airsim", AirSimAdapter)

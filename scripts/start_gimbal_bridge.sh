@@ -15,6 +15,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 IFC_PRO_DIR="${IFC_PRO_DIR:-/home/ubuntu/ifc_pro}"
 ROS_SETUP="${ROS_SETUP:-/opt/ros/humble/setup.bash}"
+# The bridge is the ROS2 simulation path; the real-vehicle launcher uses
+# scripts/start_real.sh and ROS1 Noetic instead.
+export GIMBAL_ROS_VERSION=2
+export GIMBAL_SERVICE_PREFIX=common/camera
 
 # ── 环境: ROS2 + photo_function srv + gz 绑定需要纯 Python protobuf ──
 # ROS2 setup 脚本里有未绑定变量，sourcing 前关掉 set -u
