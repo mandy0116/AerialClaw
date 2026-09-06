@@ -1748,7 +1748,7 @@ def on_execute_skill(data):
     data: {
         "robot_id": "UAV_1",
         "skill_name": "takeoff",
-        "parameters": {"altitude": 5.0}
+        "parameters": {"altitude": 1.5}
     }
     """
     if not state.initialized:

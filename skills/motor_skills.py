@@ -628,7 +628,7 @@ class FlyRelative(Skill):
     name = "fly_relative"
     description = (
         "相对当前位置和朝向移动。使用前/后/左/右/上/下, 单位: 米。"
-        "例如: forward=10 表示往前飞10米, right=5 表示往右飞5米。"
+        "例如: forward=2 表示往前飞2米, right=1 表示往右飞1米。"
         "多个方向可以同时指定。"
     )
     skill_type = "hard"

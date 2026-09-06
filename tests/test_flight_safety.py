@@ -74,6 +74,18 @@ def test_takeoff_rejects_unsafe_altitude_and_low_battery():
     assert not adapter.is_in_air()
 
 
+def test_takeoff_default_is_indoor_1_5m():
+    adapter = MockAdapter()
+    adapter.connect()
+    adapter_manager._adapter = adapter
+
+    result = Takeoff().execute({})
+
+    assert result.success
+    assert result.output["actual_altitude"] == 1.5
+    assert adapter.get_position().down == -1.5
+
+
 def test_fly_relative_rejects_a_step_over_three_metres():
     adapter = MockAdapter()
     adapter.connect()

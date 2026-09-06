@@ -392,7 +392,7 @@ GET /api/devices
   "device_id": "drone_01",
   "action": "takeoff",
   "params": {
-    "altitude": 5.0
+    "altitude": 1.5
   },
   "timeout": 30.0
 }
@@ -404,9 +404,9 @@ GET /api/devices
   "action_id": "act_20260315_001",
   "device_id": "drone_01",
   "success": true,
-  "message": "起飞至 5.0m",
+  "message": "起飞至 1.5m",
   "output": {
-    "final_altitude": 5.02
+    "final_altitude": 1.52
   },
   "cost_time": 12.5
 }

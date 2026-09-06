@@ -40,15 +40,15 @@
 
 ## 可用硬技能
 
-- takeoff: 从当前高度往上飞指定米数（相对上升）。altitude=30表示从当前位置再往上飞30米。 [参数: altitude]
+- takeoff: 室内安全起飞到指定离地高度；默认 1.5m，最高 4m。 [参数: altitude]
 - land: 安全降落：逐步下降并用下方深度探测地面，接近地面自动停止，不会穿模。 [参数: 无]
-- fly_to: 底层移动技能：飞到指定AirSim世界坐标。z越负越高，地面z≈-13。⚠️使用前必须先get_position！ [参数: target_position, speed]
-- fly_relative: 相对当前位置和朝向移动。使用前/后/左/右/上/下, 单位: 米。例如: forward=10 表示往前飞10米, right=5 表示往右飞5米。多个方向可以同时指定。 [参数: forward, right, up, speed]
+- fly_to: 室内点到点移动；使用 NED 坐标，单次不超过 3m，速度不超过 1.5m/s。 [参数: target_position, speed]
+- fly_relative: 相对当前位置和朝向移动。使用前/后/左/右/上/下, 单位: 米。例如: forward=2 表示往前飞2米, right=1 表示往右飞1米。多个方向可以同时指定。 [参数: forward, right, up, speed]
 - hover: 无人机在当前位置悬停指定时间。前提：无人机必须在空中。 [参数: duration]
 - change_altitude: 在当前水平位置上调整飞行高度。前提：无人机必须在空中。打断后想往上飞用这个。 [参数: altitude]
 - get_position: 获取无人机当前的 AirSim 世界坐标和 GPS 坐标。 [参数: 无]
 - get_battery: 获取无人机电池电压和剩余电量。 [参数: 无]
-- return_to_launch: 无人机返回起飞位置并自动降落。调用后无人机会在地面, 不需要再额外调用 land。 [参数: 无]
+- return_to_launch: 室内安全模式下原地降落；不执行可能爬升且依赖 GPS 的室外 RTL。 [参数: 无]
 - look_around: 在当前位置原地旋转一圈, 观察四周环境。用于搜索目标、侦察地形。旋转期间 LiDAR 持续扫描。 [参数: duration]
 - mark_location: 在当前位置设置标记点, 记录发现的目标或兴趣点。标记会保存到世界模型, 后续可以查看所有标记。 [参数: label, priority]
 - get_marks: 查看已设置的所有标记点列表。 [参数: 无]

@@ -176,7 +176,7 @@ class VLMAnalyzer:
         self,
         image,
         camera_direction: str = "前方",
-        altitude: float = 5.0,
+        altitude: float = 1.5,
         task_context: str = "环境探索",
     ) -> Optional[Dict[str, Any]]:
         """
@@ -204,7 +204,7 @@ class VLMAnalyzer:
         image,
         target_description: str,
         camera_direction: str = "前方",
-        altitude: float = 5.0,
+        altitude: float = 1.5,
     ) -> Optional[Dict[str, Any]]:
         """
         目标搜索: 分析图像, 判断是否发现搜索目标。
@@ -222,7 +222,7 @@ class VLMAnalyzer:
         image,
         camera_direction: str = "前方",
         target_direction: str = "正前方",
-        altitude: float = 5.0,
+        altitude: float = 1.5,
     ) -> Optional[Dict[str, Any]]:
         """
         导航辅助: 评估飞行路径安全性。

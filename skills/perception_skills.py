@@ -483,7 +483,7 @@ class GetSensorData(Skill):
                 "heading": 0.0,
             },
             "barometer_data": {
-                "altitude": 10.0,
+                "altitude": 1.5,
                 "pressure": 1013.25,
                 "qnh": 1013.25,
             },
@@ -605,7 +605,7 @@ class Observe(Skill):
 
         # 2. 获取当前高度
         adapter = _get_adapter()
-        altitude = 10.0
+        altitude = 1.5
         if adapter:
             try:
                 pos = adapter.get_position()
@@ -721,7 +721,7 @@ class Observe(Skill):
 
         # 获取高度
         adapter = _get_adapter()
-        altitude = 10.0
+        altitude = 1.5
         if adapter:
             try:
                 pos = adapter.get_position()

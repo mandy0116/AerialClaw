@@ -237,7 +237,7 @@ http://localhost:5001
 1. 点 **「⚡ 初始化系统」**
 2. 看 cockpit/摄像头面板：前/后/左/右/下五路 + LiDAR 应有画面，不是 `NO SIGNAL`
 3. 配了 LLM 的话，右上角切到 **「🤖 AI」** 模式
-4. 试一句：`起飞至15米高度并观察周围环境`
+4. 试一句：`起飞至1.5米高度并观察周围环境`
 
 **命令行侧（另开终端）：**
 ```bash
@@ -769,7 +769,7 @@ http://<NX的IP>:5001
 2. 网页 manual 模式：arm → 电机响应 → disarm。✅
 3. takeoff（拆桨空转）→ stop_execution → 停住。✅
 4. 上桨 → 室外空旷 → 系绳 → 低空悬停 30 秒。✅
-5. 切 AI 模式，发"起飞至 5 米并悬停"，手放在 RC 接管开关上。✅
+5. 切 AI 模式，发"起飞至 1.5 米并悬停"，手放在 RC 接管开关上。✅
 6. （SIYI 接好后）`ros2 service list | grep camera` → 云台服务在；网页发"云台转向左前方并放大一倍"。✅
 7. （相机桥接好后）`curl -s http://<NX>:5001/api/sensor/status` → `running:true`、gimbal `frame_count` 在涨；网页云台画面有图。✅
 

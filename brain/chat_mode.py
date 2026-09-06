@@ -263,7 +263,7 @@ def _fallback_single_action_plan(user_input):
     # because those may be complex navigation requests requiring planning.
     if text in {"起飞", "起飞。", "takeoff", "take off"} or "起飞到" in text:
         import re
-        altitude = 5.0
+        altitude = 1.5
         m = re.search(r"(\d+(?:\.\d+)?)\s*(?:米|m)?", text)
         if m:
             altitude = float(m.group(1))
@@ -357,7 +357,7 @@ def unified_chat(
                     corrected_text = (
                         "抱歉, 我目前的技能组合可能无法直接完成这个复杂任务。"
                         "我可以尝试分步执行 -- 你能把任务拆成更具体的指令吗?"
-                        "比如\"先飞到世界坐标[50,50,-43]\"（z=-43≈离地30m）或\"起飞到15米高度\"。"
+                        "比如\"先飞到世界坐标[1,1,-1.5]\"（室内小范围 NED 坐标）或\"起飞到1.5米高度\"。"
                     )
                 return {"type": "chat", "text": corrected_text, "plan": None}
 

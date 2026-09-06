@@ -24,7 +24,7 @@ class Takeoff(Skill):
 
     def execute(self, input_data: dict) -> SkillResult:
         adapter = _get_adapter()
-        altitude = input_data.get("altitude", 5.0)
+        altitude = input_data.get("altitude", 1.5)
         ok = adapter.takeoff(altitude)
         return SkillResult(success=ok)
 ```
@@ -39,7 +39,7 @@ Take off to a specified altitude.
 ## Parameters
 | Name     | Type  | Required | Default | Description          |
 |----------|-------|----------|---------|----------------------|
-| altitude | float | No       | 5.0     | Target altitude (m)  |
+| altitude | float | No       | 1.5     | Target altitude (m)  |
 
 ## Returns
 - ok: bool

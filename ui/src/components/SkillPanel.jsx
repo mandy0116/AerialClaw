@@ -18,14 +18,14 @@ const TYPE_COLORS = {
 // 技能默认参数
 const SKILL_PARAMS = {
   // 硬技能 — UAV
-  takeoff:          { altitude: 5.0 },
+  takeoff:          { altitude: 1.5 },
   land:             {},
-  fly_to:           { target_position: [10, 0, -5], speed: 2.0 },
+  fly_to:           { target_position: [1, 0, -1.5], speed: 1.0 },
   hover:            { duration: 5.0 },
   get_position:     {},
   get_battery:      {},
   return_to_launch: {},
-  change_altitude:  { altitude: 10.0 },
+  change_altitude:  { altitude: 1.5 },
   // 硬技能 — UGV
   move_to:          { target_position: [10, 0, 0], speed: 1.0 },
   // 硬技能 — UAV+UGV
